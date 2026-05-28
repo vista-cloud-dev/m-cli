@@ -135,6 +135,9 @@ func (f *fakeEngine) RunRoutine(_ context.Context, entryref string, _ ...string)
 func (f *fakeEngine) RunXCmd(_ context.Context, _ string) (engine.Result, error) {
 	return engine.Result{}, nil
 }
+func (f *fakeEngine) RunScript(_ context.Context, _ string) (engine.Result, error) {
+	return engine.Result{}, nil
+}
 
 func TestRunSuiteOK(t *testing.T) {
 	f := &fakeEngine{out: "Results: 1 tests  1 passed  0 failed\nAll tests passed.\n"}

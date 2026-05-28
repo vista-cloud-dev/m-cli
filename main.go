@@ -30,6 +30,7 @@ import (
 	"github.com/vista-cloud-dev/m-cli/internal/engine"
 	"github.com/vista-cloud-dev/m-cli/internal/lint"
 	"github.com/vista-cloud-dev/m-cli/internal/lsp"
+	"github.com/vista-cloud-dev/m-cli/internal/mcov"
 	"github.com/vista-cloud-dev/m-cli/internal/mfmt"
 	"github.com/vista-cloud-dev/m-cli/internal/mtest"
 	"github.com/vista-cloud-dev/m-cli/internal/watch"
@@ -40,13 +41,14 @@ import (
 type CLI struct {
 	clikit.Globals
 
-	Fmt     fmtCmd           `cmd:"" help:"Format M source over the parse tree (AST-preserving)."`
-	Lint    lintCmd          `cmd:"" help:"Lint M source over the parse tree (query-driven rules)."`
-	Lsp     lspCmd           `cmd:"" help:"Run the M language server (LSP 3.x over stdio)."`
-	Test    testCmd          `cmd:"" help:"Run *TST.m suites through the engine (^STDASSERT)."`
-	Watch   watchCmd         `cmd:"" help:"Re-run lint (and fmt-check) on M files as they change (static half)."`
-	Version versionCmd       `cmd:"" help:"Show version, Go toolchain, and embedded grammar hash."`
-	Schema  clikit.SchemaCmd `cmd:"" help:"Emit the command/flag/enum tree as JSON (agent discovery)."`
+	Fmt      fmtCmd           `cmd:"" help:"Format M source over the parse tree (AST-preserving)."`
+	Lint     lintCmd          `cmd:"" help:"Lint M source over the parse tree (query-driven rules)."`
+	Lsp      lspCmd           `cmd:"" help:"Run the M language server (LSP 3.x over stdio)."`
+	Test     testCmd          `cmd:"" help:"Run *TST.m suites through the engine (^STDASSERT)."`
+	Coverage coverageCmd      `cmd:"" help:"Line coverage over the engine (YDB view \"TRACE\" → LCOV)."`
+	Watch    watchCmd         `cmd:"" help:"Re-run lint (and fmt-check) on M files as they change (static half)."`
+	Version  versionCmd       `cmd:"" help:"Show version, Go toolchain, and embedded grammar hash."`
+	Schema   clikit.SchemaCmd `cmd:"" help:"Emit the command/flag/enum tree as JSON (agent discovery)."`
 
 	InstallCompletions kongplete.InstallCompletions `cmd:"" help:"Install shell tab-completions."`
 }
@@ -435,6 +437,146 @@ func (c *testCmd) Run(cc *clikit.Context) error {
 	if failedSuites > 0 {
 		return clikit.Fail(clikit.ExitCheck, "TESTS_FAILED",
 			fmt.Sprintf("%d of %d suite(s) failed", failedSuites, report.Suites), "")
+	}
+	return nil
+}
+
+// --- coverage ----------------------------------------------------------------
+
+type coverageCmd struct {
+	Paths      []string `arg:"" optional:"" type:"path" help:"Routines + suites, or directories (default: .)."`
+	Engine     string   `help:"Engine: ydb or iris. Else $M_ENGINE / heuristic; refuses (exit 4) if unresolved."`
+	Docker     string   `help:"Run inside this running container via docker exec (e.g. m-test-engine)."`
+	Routines   []string `help:"Extra source dirs to stage (e.g. m-stdlib/src). Repeatable."`
+	MinPercent float64  `name:"min-percent" help:"Fail (exit 3) if line coverage is below this percent."`
+	Lcov       string   `help:"Write an LCOV tracefile to this path."`
+}
+
+type fileCov struct {
+	Path    string `json:"path"`
+	Covered int    `json:"covered"`
+	Total   int    `json:"total"`
+}
+
+type coverageReport struct {
+	Engine  string    `json:"engine"`
+	Covered int       `json:"coveredLines"`
+	Total   int       `json:"totalLines"`
+	Percent float64   `json:"linePercent"`
+	Files   []fileCov `json:"files"`
+}
+
+func (c *coverageCmd) Run(cc *clikit.Context) error {
+	kind, explicit, err := engine.Resolve(engine.DetectConfig(c.Engine))
+	if err != nil {
+		return clikit.Fail(clikit.ExitUsage, "BAD_ENGINE", err.Error(), "use --engine ydb|iris")
+	}
+	if !explicit {
+		return clikit.Fail(clikit.ExitRefused, "ENGINE_UNRESOLVED",
+			"no engine resolved for an engine-bound command",
+			"pass --engine ydb|iris, set $M_ENGINE, or run where IRIS is detected")
+	}
+
+	ctx := context.Background()
+	p, err := parse.New(ctx)
+	if err != nil {
+		return clikit.Fail(clikit.ExitRuntime, "PARSER_INIT", err.Error(), "")
+	}
+	defer func() { _ = p.Close(ctx) }()
+
+	paths := c.Paths
+	if len(paths) == 0 {
+		paths = []string{"."}
+	}
+	allFiles, err := discover(paths)
+	if err != nil {
+		return clikit.Fail(clikit.ExitRuntime, "DISCOVER_FAILED", err.Error(), "")
+	}
+	var routinePaths, suiteEntries []string
+	for _, f := range allFiles {
+		if mtest.IsSuiteFile(f) {
+			suiteEntries = append(suiteEntries, strings.TrimSuffix(filepath.Base(f), filepath.Ext(f)))
+		} else {
+			routinePaths = append(routinePaths, f)
+		}
+	}
+
+	var eng engine.Engine
+	if c.Docker != "" {
+		stageDir := fmt.Sprintf("/m-work/m-cov-%d", time.Now().UnixNano())
+		files := append([]string{}, allFiles...)
+		for _, rdir := range c.Routines {
+			ms, _ := filepath.Glob(filepath.Join(rdir, "*.m"))
+			files = append(files, ms...)
+		}
+		if err := engine.DockerStage(ctx, c.Docker, stageDir, files); err != nil {
+			return clikit.Fail(clikit.ExitRuntime, "STAGE_FAILED", err.Error(), "")
+		}
+		defer engine.DockerUnstage(ctx, c.Docker, stageDir)
+		eng = engine.New(kind, engine.Options{Runner: engine.DockerRunner(c.Docker, stageDir)})
+	} else {
+		eng = engine.New(kind, engine.Options{})
+	}
+
+	result, err := mcov.Run(ctx, p, eng, routinePaths, suiteEntries)
+	if err != nil {
+		return clikit.Fail(clikit.ExitRuntime, "COVERAGE_RUN", err.Error(),
+			"m coverage runs on a live engine — is ydb/iris installed and reachable?")
+	}
+
+	if c.Lcov != "" {
+		if err := os.WriteFile(c.Lcov, []byte(mcov.LCOV(result)), 0o644); err != nil {
+			return clikit.Fail(clikit.ExitRuntime, "LCOV_WRITE", err.Error(), "")
+		}
+	}
+
+	// Per-file rollup.
+	type acc struct{ cov, tot int }
+	byPath := map[string]*acc{}
+	var order []string
+	for _, l := range result.Lines {
+		a := byPath[l.Path]
+		if a == nil {
+			a = &acc{}
+			byPath[l.Path] = a
+			order = append(order, l.Path)
+		}
+		a.tot++
+		if l.Hits > 0 {
+			a.cov++
+		}
+	}
+	report := coverageReport{
+		Engine: string(kind), Covered: result.Covered(), Total: result.Total(), Percent: result.Percent(),
+	}
+	for _, path := range order {
+		report.Files = append(report.Files, fileCov{Path: path, Covered: byPath[path].cov, Total: byPath[path].tot})
+	}
+
+	if err := cc.Result(report, func() {
+		cc.Title("coverage")
+		cc.KV(
+			[2]string{"engine", cc.Accent(report.Engine)},
+			[2]string{"lines", fmt.Sprintf("%d/%d covered", report.Covered, report.Total)},
+			[2]string{"percent", fmt.Sprintf("%.1f%%", report.Percent)},
+		)
+		for _, f := range report.Files {
+			pct := 0.0
+			if f.Total > 0 {
+				pct = 100 * float64(f.Covered) / float64(f.Total)
+			}
+			fmt.Fprintf(cc.Stdout, "  %s  %d/%d  %s\n", f.Path, f.Covered, f.Total, cc.Faint(fmt.Sprintf("%.1f%%", pct)))
+		}
+		if c.Lcov != "" {
+			fmt.Fprintln(cc.Stdout, cc.Faint("wrote LCOV → "+c.Lcov))
+		}
+	}); err != nil {
+		return err
+	}
+
+	if c.MinPercent > 0 && report.Total > 0 && report.Percent < c.MinPercent {
+		return clikit.Fail(clikit.ExitCheck, "BELOW_MIN_COVERAGE",
+			fmt.Sprintf("line coverage %.1f%% is below the %.1f%% minimum", report.Percent, c.MinPercent), "")
 	}
 	return nil
 }

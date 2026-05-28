@@ -36,3 +36,10 @@ func (e *IrisEngine) RunXCmd(ctx context.Context, mcmd string) (Result, error) {
 	argv := []string{e.bin, "session", e.instance, "-U", e.namespace}
 	return e.run(ctx, argv, mcmd+"\nhalt\n")
 }
+
+// RunScript pipes a multi-line script to an interactive `iris session` (the
+// script should end with `halt`; one is appended if absent).
+func (e *IrisEngine) RunScript(ctx context.Context, script string) (Result, error) {
+	argv := []string{e.bin, "session", e.instance, "-U", e.namespace}
+	return e.run(ctx, argv, script)
+}

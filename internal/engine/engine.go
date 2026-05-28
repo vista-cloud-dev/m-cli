@@ -47,6 +47,10 @@ type Engine interface {
 	EnsureLoaded(ctx context.Context, path string) error
 	RunRoutine(ctx context.Context, entryref string, args ...string) (Result, error)
 	RunXCmd(ctx context.Context, mcmd string) (Result, error)
+	// RunScript runs a multi-line M script in direct mode (fed on stdin). Used
+	// for compound operations like the coverage trace pass (view "TRACE" … →
+	// zwrite ^ycov … halt).
+	RunScript(ctx context.Context, script string) (Result, error)
 }
 
 // Options configure a constructed engine (defaults are filled by New).

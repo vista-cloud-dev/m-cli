@@ -27,3 +27,9 @@ func (e *YdbEngine) RunRoutine(ctx context.Context, entryref string, args ...str
 func (e *YdbEngine) RunXCmd(ctx context.Context, mcmd string) (Result, error) {
 	return e.run(ctx, []string{e.bin, "-run", "%XCMD", mcmd}, "")
 }
+
+// RunScript runs a multi-line script in YDB direct mode (`ydb -direct`), feeding
+// the script on stdin. The script should end with `halt`.
+func (e *YdbEngine) RunScript(ctx context.Context, script string) (Result, error) {
+	return e.run(ctx, []string{e.bin, "-direct"}, script)
+}
