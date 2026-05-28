@@ -84,8 +84,11 @@ func TestIrisCommands(t *testing.T) {
 	}
 
 	_, _ = e.RunRoutine(ctx, "^FOO")
-	if got := strings.Join(c.argv, " "); got != "iris session VISTA -U VISTA ^FOO" {
+	if got := strings.Join(c.argv, " "); got != "iris session VISTA -U VISTA" {
 		t.Errorf("RunRoutine argv = %q", got)
+	}
+	if c.stdin != "do ^FOO\nhalt\n" {
+		t.Errorf("RunRoutine stdin = %q, want piped `do ^FOO  halt`", c.stdin)
 	}
 
 	if err := e.EnsureLoaded(ctx, "/m/DGREG.mac"); err != nil {

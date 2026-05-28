@@ -22,12 +22,12 @@ func (e *IrisEngine) EnsureLoaded(ctx context.Context, path string) error {
 	return err
 }
 
-// RunRoutine runs an entryref via `iris session <inst> -U <ns> <entryref>`.
-// (IRIS argument passing differs from YDB's $ZCMDLINE; args are appended
-// best-effort and refined when the integration tier lands.)
-func (e *IrisEngine) RunRoutine(ctx context.Context, entryref string, args ...string) (Result, error) {
-	argv := append([]string{e.bin, "session", e.instance, "-U", e.namespace, entryref}, args...)
-	return e.run(ctx, argv, "")
+// RunRoutine runs an entryref by piping `do <entryref>  halt` to an interactive
+// `iris session` (more reliable than passing the routine on argv). args are
+// ignored for now (IRIS argument passing differs from YDB's $ZCMDLINE).
+func (e *IrisEngine) RunRoutine(ctx context.Context, entryref string, _ ...string) (Result, error) {
+	argv := []string{e.bin, "session", e.instance, "-U", e.namespace}
+	return e.run(ctx, argv, "do "+entryref+"\nhalt\n")
 }
 
 // RunXCmd runs a one-off M command by piping it (plus halt) to an interactive

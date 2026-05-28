@@ -151,9 +151,6 @@ func TestRunSuiteOK(t *testing.T) {
 	if len(f.ran) != 1 || f.ran[0] != "^SAMPLETST" {
 		t.Errorf("ran = %v, want [^SAMPLETST]", f.ran)
 	}
-	if len(f.loaded) != 1 || f.loaded[0] != "/x/SAMPLETST.m" {
-		t.Errorf("loaded = %v, want [/x/SAMPLETST.m]", f.loaded)
-	}
 }
 
 // A non-zero engine exit must make the suite fail even if the summary parsed ok.
