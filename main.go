@@ -14,12 +14,15 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/willabides/kongplete"
 
@@ -27,6 +30,7 @@ import (
 	"github.com/vista-cloud-dev/m-cli/internal/lint"
 	"github.com/vista-cloud-dev/m-cli/internal/lsp"
 	"github.com/vista-cloud-dev/m-cli/internal/mfmt"
+	"github.com/vista-cloud-dev/m-cli/internal/watch"
 	"github.com/vista-cloud-dev/m-parse/parse"
 )
 
@@ -37,6 +41,7 @@ type CLI struct {
 	Fmt     fmtCmd           `cmd:"" help:"Format M source over the parse tree (AST-preserving)."`
 	Lint    lintCmd          `cmd:"" help:"Lint M source over the parse tree (query-driven rules)."`
 	Lsp     lspCmd           `cmd:"" help:"Run the M language server (LSP 3.x over stdio)."`
+	Watch   watchCmd         `cmd:"" help:"Re-run lint (and fmt-check) on M files as they change (static half)."`
 	Version versionCmd       `cmd:"" help:"Show version, Go toolchain, and embedded grammar hash."`
 	Schema  clikit.SchemaCmd `cmd:"" help:"Emit the command/flag/enum tree as JSON (agent discovery)."`
 
@@ -304,6 +309,91 @@ func (c *lintCmd) Run(cc *clikit.Context) error {
 			fmt.Sprintf("%d lint finding(s) in %d file(s)", len(diags), len(files)), "")
 	}
 	return nil
+}
+
+// --- watch -------------------------------------------------------------------
+
+type watchCmd struct {
+	Paths    []string `arg:"" optional:"" type:"path" help:"Files or directories to watch (default: .)."`
+	Profile  string   `default:"default" enum:"default,modern,all" help:"Lint rule profile."`
+	Interval int      `default:"500" help:"Poll interval in milliseconds."`
+	Fmt      bool     `help:"Also flag files that aren't canonically formatted."`
+}
+
+func (c *watchCmd) Run(cc *clikit.Context) error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
+	p, err := parse.New(ctx)
+	if err != nil {
+		return clikit.Fail(clikit.ExitRuntime, "PARSER_INIT", err.Error(), "")
+	}
+	defer func() { _ = p.Close(context.Background()) }()
+
+	linter, err := lint.NewLinter(p, lint.Profile(c.Profile))
+	if err != nil {
+		return clikit.Fail(clikit.ExitRuntime, "RULE_COMPILE", err.Error(), "")
+	}
+	defer linter.Close()
+
+	paths := c.Paths
+	if len(paths) == 0 {
+		paths = []string{"."}
+	}
+	w := &watch.Watcher{
+		List:     func() ([]string, error) { return discover(paths) },
+		Interval: time.Duration(c.Interval) * time.Millisecond,
+	}
+
+	fmt.Fprintln(cc.Stdout, cc.Faint(fmt.Sprintf("watching %s (profile %s) — Ctrl+C to stop",
+		strings.Join(paths, ", "), c.Profile)))
+
+	onChange := func(ev watch.Event) {
+		for _, f := range ev.Removed {
+			fmt.Fprintf(cc.Stdout, "%s %s\n", cc.Faint(cc.Glyphs().Dot), cc.Faint(f+" removed"))
+		}
+		for _, f := range ev.Changed {
+			c.checkFile(ctx, cc, p, linter, f)
+		}
+	}
+
+	err = w.Watch(ctx, true, onChange)
+	if errors.Is(err, context.Canceled) {
+		fmt.Fprintln(cc.Stdout, cc.Faint("stopped"))
+		return nil
+	}
+	return err
+}
+
+// checkFile lints (and optionally fmt-checks) one file and prints the result.
+func (c *watchCmd) checkFile(ctx context.Context, cc *clikit.Context, p *parse.Parser, linter *lint.Linter, f string) {
+	src, err := os.ReadFile(f)
+	if err != nil {
+		return
+	}
+	findings, lerr := linter.Lint(ctx, src)
+	if lerr != nil {
+		fmt.Fprintln(cc.Stdout, cc.Failure(f+": "+lerr.Error()))
+		return
+	}
+	unformatted := false
+	if c.Fmt {
+		if out, ferr := mfmt.Format(ctx, p, src, mfmt.Rules(mfmt.Canonical)); ferr == nil && string(out) != string(src) {
+			unformatted = true
+		}
+	}
+	if len(findings) == 0 && !unformatted {
+		fmt.Fprintln(cc.Stdout, cc.Success(f))
+		return
+	}
+	fmt.Fprintf(cc.Stdout, "%s %s\n", cc.Faint(cc.Glyphs().Arrow), cc.Accent(f))
+	for _, fd := range findings {
+		fmt.Fprintf(cc.Stdout, "  %s %d:%d  %s  %s\n",
+			cc.Severity(string(fd.Severity)), fd.Line, fd.Col, cc.Faint(fd.Rule), fd.Message)
+	}
+	if unformatted {
+		fmt.Fprintln(cc.Stdout, "  "+cc.Faint("needs formatting (m fmt --rules=canonical)"))
+	}
 }
 
 // --- lsp ---------------------------------------------------------------------
