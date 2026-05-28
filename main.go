@@ -27,9 +27,11 @@ import (
 	"github.com/willabides/kongplete"
 
 	"github.com/vista-cloud-dev/m-cli/clikit"
+	"github.com/vista-cloud-dev/m-cli/internal/engine"
 	"github.com/vista-cloud-dev/m-cli/internal/lint"
 	"github.com/vista-cloud-dev/m-cli/internal/lsp"
 	"github.com/vista-cloud-dev/m-cli/internal/mfmt"
+	"github.com/vista-cloud-dev/m-cli/internal/mtest"
 	"github.com/vista-cloud-dev/m-cli/internal/watch"
 	"github.com/vista-cloud-dev/m-parse/parse"
 )
@@ -41,6 +43,7 @@ type CLI struct {
 	Fmt     fmtCmd           `cmd:"" help:"Format M source over the parse tree (AST-preserving)."`
 	Lint    lintCmd          `cmd:"" help:"Lint M source over the parse tree (query-driven rules)."`
 	Lsp     lspCmd           `cmd:"" help:"Run the M language server (LSP 3.x over stdio)."`
+	Test    testCmd          `cmd:"" help:"Run *TST.m suites through the engine (^STDASSERT)."`
 	Watch   watchCmd         `cmd:"" help:"Re-run lint (and fmt-check) on M files as they change (static half)."`
 	Version versionCmd       `cmd:"" help:"Show version, Go toolchain, and embedded grammar hash."`
 	Schema  clikit.SchemaCmd `cmd:"" help:"Emit the command/flag/enum tree as JSON (agent discovery)."`
@@ -307,6 +310,109 @@ func (c *lintCmd) Run(cc *clikit.Context) error {
 	if c.Check && len(diags) > 0 {
 		return clikit.Fail(clikit.ExitCheck, "FINDINGS",
 			fmt.Sprintf("%d lint finding(s) in %d file(s)", len(diags), len(files)), "")
+	}
+	return nil
+}
+
+// --- test --------------------------------------------------------------------
+
+type testCmd struct {
+	Paths  []string `arg:"" optional:"" type:"path" help:"Suites or directories to run (default: .)."`
+	Engine string   `help:"Engine: ydb or iris. Else $M_ENGINE / heuristic; refuses (exit 4) if unresolved."`
+}
+
+type suiteResult struct {
+	Suite  string `json:"suite"`
+	Passed int    `json:"passed"`
+	Failed int    `json:"failed"`
+	Total  int    `json:"total"`
+	OK     bool   `json:"ok"`
+}
+
+type testReport struct {
+	Engine  string        `json:"engine"`
+	Suites  int           `json:"suites"`
+	Passed  int           `json:"passed"`
+	Failed  int           `json:"failed"`
+	Results []suiteResult `json:"results"`
+}
+
+func (c *testCmd) Run(cc *clikit.Context) error {
+	// Engine-bound command: resolve the engine and refuse (exit 4) if the
+	// choice is the bare default (§2.1 ambiguity rule).
+	kind, explicit, err := engine.Resolve(engine.DetectConfig(c.Engine))
+	if err != nil {
+		return clikit.Fail(clikit.ExitUsage, "BAD_ENGINE", err.Error(), "use --engine ydb|iris")
+	}
+	if !explicit {
+		return clikit.Fail(clikit.ExitRefused, "ENGINE_UNRESOLVED",
+			"no engine resolved for an engine-bound command",
+			"pass --engine ydb|iris, set $M_ENGINE, or run where IRIS is detected")
+	}
+
+	ctx := context.Background()
+	p, err := parse.New(ctx)
+	if err != nil {
+		return clikit.Fail(clikit.ExitRuntime, "PARSER_INIT", err.Error(), "")
+	}
+	defer func() { _ = p.Close(ctx) }()
+
+	paths := c.Paths
+	if len(paths) == 0 {
+		paths = []string{"."}
+	}
+	suites, err := mtest.Discover(p, paths)
+	if err != nil {
+		return clikit.Fail(clikit.ExitRuntime, "DISCOVER_FAILED", err.Error(), "")
+	}
+
+	report := testReport{Engine: string(kind), Suites: len(suites)}
+	var failedSuites int
+	if len(suites) > 0 {
+		eng := engine.New(kind, engine.Options{})
+		results, runErr := mtest.Run(ctx, eng, suites)
+		if runErr != nil {
+			return clikit.Fail(clikit.ExitRuntime, "ENGINE_RUN", runErr.Error(),
+				"m test runs on a live engine — is ydb/iris installed and reachable?")
+		}
+		for _, r := range results {
+			report.Passed += r.Summary.Passed
+			report.Failed += r.Summary.Failed
+			if !r.OK {
+				failedSuites++
+			}
+			report.Results = append(report.Results, suiteResult{
+				Suite: r.Suite, Passed: r.Summary.Passed, Failed: r.Summary.Failed,
+				Total: r.Summary.Total, OK: r.OK,
+			})
+		}
+	}
+
+	if err := cc.Result(report, func() {
+		cc.Title("test")
+		cc.KV(
+			[2]string{"engine", cc.Accent(report.Engine)},
+			[2]string{"suites", fmt.Sprintf("%d", report.Suites)},
+			[2]string{"assertions", fmt.Sprintf("%d passed, %d failed", report.Passed, report.Failed)},
+		)
+		for _, r := range report.Results {
+			mark := cc.Success("PASS")
+			if !r.OK {
+				mark = cc.Failure("FAIL")
+			}
+			fmt.Fprintf(cc.Stdout, "  %s %s  %s\n", mark, r.Suite,
+				cc.Faint(fmt.Sprintf("%d/%d passed", r.Passed, r.Total)))
+		}
+		if report.Suites == 0 {
+			fmt.Fprintln(cc.Stdout, cc.Faint("no *TST.m suites found"))
+		}
+	}); err != nil {
+		return err
+	}
+
+	if failedSuites > 0 {
+		return clikit.Fail(clikit.ExitCheck, "TESTS_FAILED",
+			fmt.Sprintf("%d of %d suite(s) failed", failedSuites, report.Suites), "")
 	}
 	return nil
 }
