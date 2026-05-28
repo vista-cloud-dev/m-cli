@@ -1,0 +1,17 @@
+m-cli
+Copyright 2026 vista-cloud-dev
+
+The Go code in this product (main, the internal packages, clikit) is licensed
+under the Apache License, Version 2.0 (see LICENSE).
+
+m-cli is the cross-engine M toolchain — the `m` busybox (fmt/lint/lsp/test/
+coverage/watch over YottaDB and IRIS). It depends on the m-parse substrate
+(github.com/vista-cloud-dev/m-parse), which embeds the tree-sitter-m grammar as
+WebAssembly; that embedded grammar is currently AGPL-3.0, so binaries linking
+m-parse transitively include an AGPL-derived artifact.
+
+Licensing reconciliation is DEFERRED to project completion (project policy):
+all toolchain licensing is reconciled in one pass then, with the end-state being
+Apache-2.0 for every artifact except the VS Code extensions, which are MIT. The
+interim AGPL status of the embedded grammar is not treated as a blocker. See the
+m-parse NOTICE / wasm/VENDOR.md and the toolchain spec §10.
