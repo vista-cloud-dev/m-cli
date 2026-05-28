@@ -24,13 +24,16 @@ const (
 	Info    Severity = "info"
 )
 
-// Finding is one lint result, with a 1-based line/column for display.
+// Finding is one lint result, with a 1-based line/column. The End* fields mark
+// the end of the offending span (the matched node) so editors can range it.
 type Finding struct {
 	Rule     string   `json:"rule"`
 	Severity Severity `json:"severity"`
 	Message  string   `json:"message"`
 	Line     int      `json:"line"`
 	Col      int      `json:"col"`
+	EndLine  int      `json:"endLine"`
+	EndCol   int      `json:"endCol"`
 }
 
 // Rule is a query-driven lint rule. Query is tree-sitter query source; Check is
@@ -95,10 +98,12 @@ func (l *Linter) Lint(ctx context.Context, src []byte) ([]Finding, error) {
 			if !ok {
 				continue
 			}
-			pos := m.Captures[0].Node.StartPoint()
+			node := m.Captures[0].Node
+			start, end := node.StartPoint(), node.EndPoint()
 			findings = append(findings, Finding{
 				Rule: r.ID, Severity: r.Severity, Message: msg,
-				Line: int(pos.Row) + 1, Col: int(pos.Column) + 1,
+				Line: int(start.Row) + 1, Col: int(start.Column) + 1,
+				EndLine: int(end.Row) + 1, EndCol: int(end.Column) + 1,
 			})
 		}
 	}

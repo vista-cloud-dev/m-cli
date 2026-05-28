@@ -25,6 +25,7 @@ import (
 
 	"github.com/vista-cloud-dev/m-cli/clikit"
 	"github.com/vista-cloud-dev/m-cli/internal/lint"
+	"github.com/vista-cloud-dev/m-cli/internal/lsp"
 	"github.com/vista-cloud-dev/m-cli/internal/mfmt"
 	"github.com/vista-cloud-dev/m-parse/parse"
 )
@@ -35,6 +36,7 @@ type CLI struct {
 
 	Fmt     fmtCmd           `cmd:"" help:"Format M source over the parse tree (AST-preserving)."`
 	Lint    lintCmd          `cmd:"" help:"Lint M source over the parse tree (query-driven rules)."`
+	Lsp     lspCmd           `cmd:"" help:"Run the M language server (LSP 3.x over stdio)."`
 	Version versionCmd       `cmd:"" help:"Show version, Go toolchain, and embedded grammar hash."`
 	Schema  clikit.SchemaCmd `cmd:"" help:"Emit the command/flag/enum tree as JSON (agent discovery)."`
 
@@ -300,6 +302,22 @@ func (c *lintCmd) Run(cc *clikit.Context) error {
 	if c.Check && len(diags) > 0 {
 		return clikit.Fail(clikit.ExitCheck, "FINDINGS",
 			fmt.Sprintf("%d lint finding(s) in %d file(s)", len(diags), len(files)), "")
+	}
+	return nil
+}
+
+// --- lsp ---------------------------------------------------------------------
+
+type lspCmd struct{}
+
+func (lspCmd) Run(_ *clikit.Context) error {
+	srv, err := lsp.New(os.Stdin, os.Stdout)
+	if err != nil {
+		return clikit.Fail(clikit.ExitRuntime, "LSP_INIT", err.Error(), "")
+	}
+	defer srv.Close()
+	if err := srv.Serve(); err != nil {
+		return clikit.Fail(clikit.ExitRuntime, "LSP", err.Error(), "")
 	}
 	return nil
 }
