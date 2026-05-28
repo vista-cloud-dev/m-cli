@@ -5,7 +5,7 @@ go 1.26.3
 require (
 	github.com/alecthomas/kong v1.15.0
 	github.com/charmbracelet/lipgloss v1.1.0
-	github.com/vista-cloud-dev/m-parse v0.0.0-20260528183204-13ecf18b4a36
+	github.com/vista-cloud-dev/m-parse v0.0.0-20260528192609-d8a6166546d4
 	github.com/willabides/kongplete v0.4.0
 	golang.org/x/term v0.43.0
 )

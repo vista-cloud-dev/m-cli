@@ -24,6 +24,7 @@ import (
 	"github.com/willabides/kongplete"
 
 	"github.com/vista-cloud-dev/m-cli/clikit"
+	"github.com/vista-cloud-dev/m-cli/internal/lint"
 	"github.com/vista-cloud-dev/m-cli/internal/mfmt"
 	"github.com/vista-cloud-dev/m-parse/parse"
 )
@@ -33,6 +34,7 @@ type CLI struct {
 	clikit.Globals
 
 	Fmt     fmtCmd           `cmd:"" help:"Format M source over the parse tree (AST-preserving)."`
+	Lint    lintCmd          `cmd:"" help:"Lint M source over the parse tree (query-driven rules)."`
 	Version versionCmd       `cmd:"" help:"Show version, Go toolchain, and embedded grammar hash."`
 	Schema  clikit.SchemaCmd `cmd:"" help:"Emit the command/flag/enum tree as JSON (agent discovery)."`
 
@@ -206,6 +208,100 @@ func isMFile(path string) bool {
 		return true
 	}
 	return false
+}
+
+// --- lint --------------------------------------------------------------------
+
+type lintCmd struct {
+	Paths     []string `arg:"" optional:"" type:"path" help:"Files or directories to lint (default: .)."`
+	Profile   string   `default:"default" enum:"default,modern,all" help:"Rule profile."`
+	Check     bool     `help:"Exit 3 if there are any findings (CI gate)."`
+	ListRules bool     `help:"List the rules in the selected profile (then exit)."`
+}
+
+type ruleDoc struct {
+	ID       string   `json:"id"`
+	Severity string   `json:"severity"`
+	Profiles []string `json:"profiles"`
+	Doc      string   `json:"doc"`
+}
+
+func (c *lintCmd) Run(cc *clikit.Context) error {
+	rules := lint.Profile(c.Profile)
+
+	if c.ListRules {
+		docs := make([]ruleDoc, 0, len(rules))
+		for _, r := range rules {
+			docs = append(docs, ruleDoc{ID: r.ID, Severity: string(r.Severity), Profiles: r.Profiles, Doc: r.Doc})
+		}
+		return cc.Result(docs, func() {
+			cc.Title("lint rules — profile " + c.Profile)
+			for _, d := range docs {
+				fmt.Fprintf(cc.Stdout, "  %s  %s  %s\n", cc.Accent(d.ID), cc.Faint(d.Severity), d.Doc)
+			}
+		})
+	}
+
+	ctx := context.Background()
+	p, err := parse.New(ctx)
+	if err != nil {
+		return clikit.Fail(clikit.ExitRuntime, "PARSER_INIT", err.Error(), "")
+	}
+	defer func() { _ = p.Close(ctx) }()
+
+	linter, err := lint.NewLinter(p, rules)
+	if err != nil {
+		return clikit.Fail(clikit.ExitRuntime, "RULE_COMPILE", err.Error(), "")
+	}
+	defer linter.Close()
+
+	paths := c.Paths
+	if len(paths) == 0 {
+		paths = []string{"."}
+	}
+	files, err := discover(paths)
+	if err != nil {
+		return clikit.Fail(clikit.ExitRuntime, "DISCOVER_FAILED", err.Error(), "")
+	}
+
+	var diags []clikit.Diagnostic
+	for _, f := range files {
+		src, err := os.ReadFile(f)
+		if err != nil {
+			return clikit.Fail(clikit.ExitRuntime, "READ_FAILED", fmt.Sprintf("%s: %v", f, err), "")
+		}
+		findings, err := linter.Lint(ctx, src)
+		if err != nil {
+			return clikit.Fail(clikit.ExitRuntime, "LINT_FAILED", fmt.Sprintf("%s: %v", f, err), "")
+		}
+		for _, fd := range findings {
+			diags = append(diags, clikit.Diagnostic{
+				File: f, Line: fd.Line, Col: fd.Col,
+				Rule: fd.Rule, Severity: string(fd.Severity), Message: fd.Message,
+			})
+		}
+	}
+
+	summary := map[string]int{"filesScanned": len(files), "findings": len(diags)}
+	if err := cc.Diagnostics(summary, diags, func() {
+		cc.Title("lint")
+		for _, d := range diags {
+			fmt.Fprintf(cc.Stdout, "%s  %s:%d:%d  %s  %s\n",
+				cc.Severity(d.Severity), d.File, d.Line, d.Col, cc.Faint(d.Rule), d.Message)
+		}
+		if len(diags) == 0 {
+			fmt.Fprintln(cc.Stdout, cc.Success(fmt.Sprintf("no findings (%d files, profile %s)", len(files), c.Profile)))
+		} else {
+			fmt.Fprintln(cc.Stdout, cc.Faint(fmt.Sprintf("%d finding(s) in %d file(s)", len(diags), len(files))))
+		}
+	}); err != nil {
+		return err
+	}
+	if c.Check && len(diags) > 0 {
+		return clikit.Fail(clikit.ExitCheck, "FINDINGS",
+			fmt.Sprintf("%d lint finding(s) in %d file(s)", len(diags), len(files)), "")
+	}
+	return nil
 }
 
 // --- version -----------------------------------------------------------------
