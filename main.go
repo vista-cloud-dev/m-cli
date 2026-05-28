@@ -317,8 +317,10 @@ func (c *lintCmd) Run(cc *clikit.Context) error {
 // --- test --------------------------------------------------------------------
 
 type testCmd struct {
-	Paths  []string `arg:"" optional:"" type:"path" help:"Suites or directories to run (default: .)."`
-	Engine string   `help:"Engine: ydb or iris. Else $M_ENGINE / heuristic; refuses (exit 4) if unresolved."`
+	Paths    []string `arg:"" optional:"" type:"path" help:"Suites or directories to run (default: .)."`
+	Engine   string   `help:"Engine: ydb or iris. Else $M_ENGINE / heuristic; refuses (exit 4) if unresolved."`
+	Docker   string   `help:"Run inside this running container via docker exec (e.g. m-test-engine)."`
+	Routines []string `help:"Extra source dirs to stage (e.g. m-stdlib/src for ^STDASSERT). Repeatable."`
 }
 
 type suiteResult struct {
@@ -369,7 +371,27 @@ func (c *testCmd) Run(cc *clikit.Context) error {
 	report := testReport{Engine: string(kind), Suites: len(suites)}
 	var failedSuites int
 	if len(suites) > 0 {
-		eng := engine.New(kind, engine.Options{})
+		var eng engine.Engine
+		if c.Docker != "" {
+			// Stage the suites (+ any --routines deps like ^STDASSERT) into a
+			// scratch dir in the container and run there via docker exec.
+			stageDir := fmt.Sprintf("/m-work/m-test-%d", time.Now().UnixNano())
+			var files []string
+			for _, s := range suites {
+				files = append(files, s.Path)
+			}
+			for _, rdir := range c.Routines {
+				ms, _ := filepath.Glob(filepath.Join(rdir, "*.m"))
+				files = append(files, ms...)
+			}
+			if err := engine.DockerStage(ctx, c.Docker, stageDir, files); err != nil {
+				return clikit.Fail(clikit.ExitRuntime, "STAGE_FAILED", err.Error(), "")
+			}
+			defer engine.DockerUnstage(ctx, c.Docker, stageDir)
+			eng = engine.New(kind, engine.Options{Runner: engine.DockerRunner(c.Docker, stageDir)})
+		} else {
+			eng = engine.New(kind, engine.Options{})
+		}
 		results, runErr := mtest.Run(ctx, eng, suites)
 		if runErr != nil {
 			return clikit.Fail(clikit.ExitRuntime, "ENGINE_RUN", runErr.Error(),
