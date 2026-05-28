@@ -1,9 +1,13 @@
 # Build output
 /dist/
 /bin/
-*.out
 *.test
-coverage.*
+# coverage report artifacts (anchored / specific so they don't match source
+# files like internal/mcov/coverage.go)
+/coverage.out
+coverage.html
+coverage.txt
+*.lcov
 
 # Editor / OS
 .DS_Store
