@@ -66,6 +66,12 @@ type Rule struct {
 	// Walk rule: Inspect traverses root / scans src and returns findings with
 	// Line/Col/End* + Message set; the engine stamps Rule + Severity.
 	Inspect func(root parse.Node, src []byte) []Finding
+
+	// Name-aware walk rule: like Inspect but also receives the routine name
+	// (the file's base name without extension, as passed to LintNamed). Used by
+	// rules that compare against the routine identity (e.g. M-XINDX-017). When
+	// the name is "" (plain Lint, or a non-file source) the rule should no-op.
+	InspectNamed func(root parse.Node, src []byte, routine string) []Finding
 }
 
 func (r Rule) hasTag(tag string) bool {
@@ -113,7 +119,15 @@ func (l *Linter) Close() {
 }
 
 // Lint parses src and returns the findings from every rule, sorted by position.
+// Name-aware rules (InspectNamed) see an empty routine name; use LintNamed to
+// supply one.
 func (l *Linter) Lint(ctx context.Context, src []byte) ([]Finding, error) {
+	return l.LintNamed(ctx, src, "")
+}
+
+// LintNamed is Lint with the routine name (file base name without extension)
+// threaded through to name-aware rules.
+func (l *Linter) LintNamed(ctx context.Context, src []byte, routine string) ([]Finding, error) {
 	tree, err := l.p.Parse(ctx, src)
 	if err != nil {
 		return nil, err
@@ -142,7 +156,13 @@ func (l *Linter) Lint(ctx context.Context, src []byte) ([]Finding, error) {
 			}
 			continue
 		}
-		for _, f := range r.Inspect(root, src) {
+		var raw []Finding
+		if r.InspectNamed != nil {
+			raw = r.InspectNamed(root, src, routine)
+		} else {
+			raw = r.Inspect(root, src)
+		}
+		for _, f := range raw {
 			f.Rule = r.ID
 			f.Severity = r.Severity
 			findings = append(findings, f)

@@ -9,10 +9,14 @@ import (
 	"github.com/vista-cloud-dev/m-parse/parse"
 )
 
-// Profiles is the set of recognized profile names (for the CLI enum). sac /
-// vista / xindex are reserved for when those rule families land (they'd select
-// rules tagged accordingly); today they'd be empty, so they're not exposed yet.
-var Profiles = []string{"default", "modern", "pythonic", "pedantic", "all"}
+// Profiles is the set of recognized profile names (for the CLI enum).
+//
+//	default · modern · pythonic · pedantic — the M-MOD modernization track (tag "modern")
+//	xindex  — rules ported from the VA VistA Toolkit ^XINDEX scanner (tag "xindex")
+//	sac     — the subset of xindex rules mapping to a documented VA SAC requirement (tag "sac")
+//	vista   — VistA-Kernel-specific rules (tag "vista"); pure false positives off VistA
+//	all     — every registered rule
+var Profiles = []string{"default", "modern", "pythonic", "pedantic", "xindex", "sac", "vista", "all"}
 
 // All returns every registered rule with the built-in default configuration.
 func All() []Rule { return AllWith(DefaultOptions()) }
@@ -21,7 +25,7 @@ func All() []Rule { return AllWith(DefaultOptions()) }
 // rules that need it (thresholds, Kernel allowlist, taint config). The config-
 // neutral rules are returned as-is.
 func AllWith(opts Options) []Rule {
-	return []Rule{
+	rules := []Rule{
 		ruleByRefSubscript,                     // M-MOD-037
 		ruleLineLength(opts.Thresholds),        // M-MOD-001
 		ruleDotBlockNesting(opts.Thresholds),   // M-MOD-007
@@ -35,6 +39,9 @@ func AllWith(opts Options) []Rule {
 		ruleTaintToSink(opts.Taint),            // M-MOD-036 (flow, security)
 		ruleAbbreviatedCommand,                 // M-STY-001
 	}
+	// XINDEX family (tag xindex / sac / vista) — config-neutral; appended so the
+	// xindex/sac/vista profiles and `all` select them.
+	return append(rules, xindexAll()...)
 }
 
 // Profile resolves a profile name to its rules with the default config.
@@ -55,6 +62,8 @@ func ProfileWith(name string, opts Options) []Rule {
 		return byTag("modern", opts)
 	case "pedantic":
 		return byTag("pedantic", opts)
+	case "xindex", "sac", "vista":
+		return byTag(name, opts)
 	default: // "default"
 		var out []Rule
 		for _, r := range byTag("modern", opts) {

@@ -265,7 +265,7 @@ func resolveLintFilter(profileFlag string, cfg config.Config) string {
 
 type lintCmd struct {
 	Paths     []string `arg:"" optional:"" type:"path" help:"Files or directories to lint (default: .)."`
-	Profile   string   `default:"default" enum:"default,modern,pythonic,pedantic,all" help:"Rule profile (overrides [lint] rules)."`
+	Profile   string   `default:"default" enum:"default,modern,pythonic,pedantic,xindex,sac,vista,all" help:"Rule profile (overrides [lint] rules)."`
 	Config    string   `type:"path" help:"Path to a .m-cli.toml / pyproject.toml (else discovered by walking up from CWD)."`
 	Check     bool     `help:"Exit 3 if there are any findings (CI gate)."`
 	ListRules bool     `help:"List the rules in the selected profile (then exit)."`
@@ -336,7 +336,8 @@ func (c *lintCmd) Run(cc *clikit.Context) error {
 		if err != nil {
 			return clikit.Fail(clikit.ExitRuntime, "READ_FAILED", fmt.Sprintf("%s: %v", f, err), "")
 		}
-		findings, err := linter.Lint(ctx, src)
+		routine := strings.TrimSuffix(filepath.Base(f), filepath.Ext(f))
+		findings, err := linter.LintNamed(ctx, src, routine)
 		if err != nil {
 			return clikit.Fail(clikit.ExitRuntime, "LINT_FAILED", fmt.Sprintf("%s: %v", f, err), "")
 		}
@@ -701,7 +702,7 @@ func newStagedEngine(ctx context.Context, kind engine.Kind, docker, namespace st
 
 type watchCmd struct {
 	Paths    []string `arg:"" optional:"" type:"path" help:"Files or directories to watch (default: .)."`
-	Profile  string   `default:"default" enum:"default,modern,pythonic,pedantic,all" help:"Lint rule profile (overrides [lint] rules)."`
+	Profile  string   `default:"default" enum:"default,modern,pythonic,pedantic,xindex,sac,vista,all" help:"Lint rule profile (overrides [lint] rules)."`
 	Config   string   `type:"path" help:"Path to a .m-cli.toml / pyproject.toml (else discovered by walking up from CWD)."`
 	Interval int      `default:"500" help:"Poll interval in milliseconds."`
 	Fmt      bool     `help:"Also flag files that aren't canonically formatted."`
@@ -848,7 +849,8 @@ func (c *watchCmd) checkFile(ctx context.Context, cc *clikit.Context, p *parse.P
 	if err != nil {
 		return
 	}
-	findings, lerr := linter.Lint(ctx, src)
+	routine := strings.TrimSuffix(filepath.Base(f), filepath.Ext(f))
+	findings, lerr := linter.LintNamed(ctx, src, routine)
 	if lerr != nil {
 		fmt.Fprintln(cc.Stdout, cc.Failure(f+": "+lerr.Error()))
 		return
