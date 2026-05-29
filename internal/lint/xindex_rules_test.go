@@ -245,6 +245,15 @@ func TestXindexPrecisionFixes(t *testing.T) {
 	if n := countRuleID(lintX(t, "FOO ;\n L ^X\n Q\n", "FOO"), "M-XINDX-060"); n != 1 {
 		t.Errorf("060 should still flag an acquire with no timeout, got %d", n)
 	}
+	// 013: trailing space on a COMMENT line is not flagged (XINDEX raises it only
+	// in the command loop); on a code line it still fires.
+	if n := countRuleID(lintX(t, "FOO ;\n ; a comment with trailing space \n Q\n", "FOO"), "M-XINDX-013"); n != 0 {
+		t.Errorf("013 should not flag trailing space on a comment line, got %d", n)
+	}
+	if n := countRuleID(lintX(t, "FOO ;\n S X=1 \n Q\n", "FOO"), "M-XINDX-013"); n != 1 {
+		t.Errorf("013 should still flag trailing space on a code line, got %d", n)
+	}
+
 	// 050: a `|` inside a subscript string is not an extended reference.
 	if n := countRuleID(lintX(t, "FOO ;\n S ^TMP(\"X\",Y_\" | Z |\")=1\n Q\n", "FOO"), "M-XINDX-050"); n != 0 {
 		t.Errorf("050 should not flag a pipe inside a subscript string, got %d", n)

@@ -263,20 +263,29 @@ func hasLowercaseLetter(s string) bool {
 
 // --- text / line rules -------------------------------------------------------
 
-// M-XINDX-013 — Blank(s) at end of line.
+// M-XINDX-013 — Blank(s) at end of line. Faithful to XINDEX, which raises this
+// only inside its command-parse loop (XINDEX.m: `D SEP I '$L(LIN),CH=" " D
+// E^XINDX1(13)`): so it fires only on CODE lines with no comment. A comment
+// (`;...`) consumes the rest of the line including trailing space, and a
+// whitespace-only line is a null line (M-XINDX-042), not a trailing-blank —
+// neither is flagged.
 var ruleTrailingBlanks = Rule{
 	ID: "M-XINDX-013", Severity: Style, Category: "style",
 	Title: "Blank(s) at end of line", Tags: []string{"xindex"},
 	Inspect: func(_ parse.Node, src []byte) []Finding {
 		var out []Finding
 		for i, raw := range splitLines(src) {
-			if bytes.HasSuffix(raw, []byte(" ")) || bytes.HasSuffix(raw, []byte("\t")) {
-				stripped := bytes.TrimRight(raw, " \t")
-				out = append(out, Finding{
-					Message: "Blank(s) at end of line",
-					Line:    i + 1, Col: len(stripped) + 1, EndLine: i + 1, EndCol: len(raw) + 1,
-				})
+			if !bytes.HasSuffix(raw, []byte(" ")) && !bytes.HasSuffix(raw, []byte("\t")) {
+				continue
 			}
+			if bytes.IndexByte(raw, ';') >= 0 || len(bytes.TrimSpace(raw)) == 0 {
+				continue // comment line (trailing ws is in the comment) or null line
+			}
+			stripped := bytes.TrimRight(raw, " \t")
+			out = append(out, Finding{
+				Message: "Blank(s) at end of line",
+				Line:    i + 1, Col: len(stripped) + 1, EndLine: i + 1, EndCol: len(raw) + 1,
+			})
 		}
 		return out
 	},
