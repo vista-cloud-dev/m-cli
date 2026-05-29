@@ -86,3 +86,36 @@ func TestTransactionBalancedClean(t *testing.T) {
 		t.Errorf("got %d findings %+v, want 0", len(findings), findings)
 	}
 }
+
+// M-MOD-027: SET $ETRAP with no preceding NEW $ETRAP is flagged at the SET site.
+func TestEtrapLeakFlagged(t *testing.T) {
+	l := newLinter(t, lint.Profile("default"))
+	src := []byte("E ;\n set $etrap=\"d ^err\"\n quit\n")
+	findings, err := l.Lint(context.Background(), src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("got %d findings %+v, want 1 (M-MOD-027)", len(findings), findings)
+	}
+	f := findings[0]
+	if f.Rule != "M-MOD-027" || f.Severity != lint.Error {
+		t.Errorf("got %+v, want rule M-MOD-027 severity error", f)
+	}
+	if f.Line != 2 { // anchored at the SET command, not the label header
+		t.Errorf("anchor line = %d, want 2 (the SET site)", f.Line)
+	}
+}
+
+// NEW $ETRAP before the SET clears M-MOD-027.
+func TestEtrapGuardedClean(t *testing.T) {
+	l := newLinter(t, lint.Profile("default"))
+	src := []byte("E ;\n new $etrap\n set $etrap=\"d ^err\"\n quit\n")
+	findings, err := l.Lint(context.Background(), src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(findings) != 0 {
+		t.Errorf("got %d findings %+v, want 0", len(findings), findings)
+	}
+}

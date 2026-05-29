@@ -161,6 +161,47 @@ func TestTransactionLeakOnOnePath(t *testing.T) {
 	}
 }
 
+func etrapLeaks(t *testing.T, src string) map[string]int {
+	t.Helper()
+	root, b, done := parseRoot(t, src)
+	defer done()
+	out := map[string]int{}
+	for _, cfg := range flow.BuildCFGs(root, b) {
+		out[cfg.LabelName] = len(flow.EtrapLeaks(cfg, b))
+	}
+	return out
+}
+
+// SET $ETRAP guarded by a preceding NEW $ETRAP on the only path is clean.
+func TestEtrapProtected(t *testing.T) {
+	if got := etrapLeaks(t, "E ;\n new $etrap\n set $etrap=\"d ^x\"\n quit\n")["E"]; got != 0 {
+		t.Errorf("etrap leaks = %d, want 0 (NEW $ETRAP precedes SET)", got)
+	}
+}
+
+// SET $ETRAP with no NEW $ETRAP anywhere leaks the handler.
+func TestEtrapUnprotected(t *testing.T) {
+	if got := etrapLeaks(t, "E ;\n set $etrap=\"d ^x\"\n quit\n")["E"]; got != 1 {
+		t.Errorf("etrap leaks = %d, want 1 (SET without NEW)", got)
+	}
+}
+
+// The abbreviations NEW $ET / SET $ET are recognized too.
+func TestEtrapAbbreviations(t *testing.T) {
+	if got := etrapLeaks(t, "E ;\n n $et,x\n s $ET=1\n q\n")["E"]; got != 0 {
+		t.Errorf("etrap leaks = %d, want 0 (NEW $ET protects SET $ET)", got)
+	}
+}
+
+// MUST-analysis: a NEW on only one branch does not protect — the if-skip path
+// reaches the SET unprotected, so it leaks.
+func TestEtrapNewOnOnePathLeaks(t *testing.T) {
+	src := "E ;\n i 1 new $etrap\n set $etrap=\"d ^x\"\n quit\n"
+	if got := etrapLeaks(t, src)["E"]; got != 1 {
+		t.Errorf("etrap leaks = %d, want 1 (NEW only on the IF-true path)", got)
+	}
+}
+
 // Multiple labels are analyzed independently: a leak in one does not bleed into
 // the next, and a clean label reports nothing.
 func TestMultiLabelIndependent(t *testing.T) {

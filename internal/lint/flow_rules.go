@@ -65,3 +65,33 @@ var ruleTransactionLeak = Rule{
 		return out
 	},
 }
+
+// M-MOD-027 — `SET $ETRAP=...` not preceded by `NEW $ETRAP` on every path from
+// the label entry (path-sensitive graduation of an intra-label NEW-$ETRAP
+// check). Setting the error trap without first NEW-ing it persists the new
+// handler past the label exit into whatever the caller stacked — almost always
+// a bug. A forward MUST-analysis over the same CFG decides protection at each
+// SET site; an unprotected site is flagged at the offending command.
+var ruleEtrapLeak = Rule{
+	ID:       "M-MOD-027",
+	Severity: Error,
+	Category: "bug",
+	Title:    "SET $ETRAP without NEW $ETRAP on every path",
+	Tags:     []string{"modern"},
+	Inspect: func(root parse.Node, src []byte) []Finding {
+		var out []Finding
+		for _, cfg := range flow.BuildCFGs(root, src) {
+			for _, leak := range flow.EtrapLeaks(cfg, src) {
+				out = append(out, Finding{
+					Message: fmt.Sprintf("SET $ETRAP without a preceding NEW $ETRAP on every path from %s "+
+						"— the handler escapes the label", leak.Label),
+					Line:    leak.Line,
+					Col:     leak.Col,
+					EndLine: leak.Line,
+					EndCol:  leak.EndCol,
+				})
+			}
+		}
+		return out
+	},
+}
