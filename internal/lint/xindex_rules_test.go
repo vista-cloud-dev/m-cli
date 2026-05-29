@@ -245,6 +245,11 @@ func TestXindexPrecisionFixes(t *testing.T) {
 	if n := countRuleID(lintX(t, "FOO ;\n L ^X\n Q\n", "FOO"), "M-XINDX-060"); n != 1 {
 		t.Errorf("060 should still flag an acquire with no timeout, got %d", n)
 	}
+	// 050: a `|` inside a subscript string is not an extended reference.
+	if n := countRuleID(lintX(t, "FOO ;\n S ^TMP(\"X\",Y_\" | Z |\")=1\n Q\n", "FOO"), "M-XINDX-050"); n != 0 {
+		t.Errorf("050 should not flag a pipe inside a subscript string, got %d", n)
+	}
+
 	// 030: argument arithmetic is not a label offset; a real TAG+offset still fires.
 	if n := countRuleID(lintX(t, "FOO ;\n D UP((I+2),X)\n Q\n", "FOO"), "M-XINDX-030"); n != 0 {
 		t.Errorf("030 should not flag argument arithmetic D UP((I+2),...), got %d", n)
@@ -255,6 +260,26 @@ func TestXindexPrecisionFixes(t *testing.T) {
 	// Numeric-label offset (`G 33+1`) is also label+offset (real corpus case).
 	if n := countRuleID(lintX(t, "FOO ;\n33 W 1\n G 33+1\n", "FOO"), "M-XINDX-030"); n != 1 {
 		t.Errorf("030 should flag a numeric-label offset G 33+1, got %d", n)
+	}
+}
+
+// M-XINDX-054 covers both halves of the XINDEX rule: $SYSTEM (incl. object
+// syntax under an ERROR node) and SSVNs (^$...).
+func TestXindex054Coverage(t *testing.T) {
+	cases := []string{
+		"FOO ;\n W $SYSTEM\n Q\n",                  // plain
+		"FOO ;\n S P=$SYSTEM.OBJ.Load(X)\n Q\n",    // object syntax
+		"FOO ;\n S X=$O(^$R(Y))\n Q\n",             // SSVN ^$R
+		"FOO ;\n S X=$D(^$ROUTINE(\"FOO\"))\n Q\n", // SSVN ^$ROUTINE
+	}
+	for _, src := range cases {
+		if countRuleID(lintX(t, src, "FOO"), "M-XINDX-054") == 0 {
+			t.Errorf("054 should fire on %q", src)
+		}
+	}
+	// A normal global is not an SSVN.
+	if n := countRuleID(lintX(t, "FOO ;\n S ^DPT(1)=1\n Q\n", "FOO"), "M-XINDX-054"); n != 0 {
+		t.Errorf("054 should not fire on a normal global, got %d", n)
 	}
 }
 

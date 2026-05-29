@@ -910,22 +910,27 @@ var ruleNonStandardZFunc = Rule{
 	},
 }
 
-// M-XINDX-054 — Access to SSVN's or $SYSTEM restricted to Kernel.
+// M-XINDX-054 — Access to SSVN's or $SYSTEM restricted to Kernel. Covers both
+// halves of the XINDEX rule: (1) `$SYSTEM` (incl. the `$SYSTEM.Class.Method`
+// object syntax, whose keyword lands under an ERROR node since the grammar
+// doesn't model object refs — so we match special_variable_keyword directly
+// rather than a clean special_variable parent); (2) SSVNs `^$JOB`, `^$ROUTINE`,
+// `^$R`, … — a global whose name begins with `$`.
 var ruleSystemAccess = Rule{
 	ID: "M-XINDX-054", Severity: Warning, Category: "security",
 	Title: "Access to SSVN's or $SYSTEM restricted to Kernel", Tags: []string{"xindex", "sac", "vista"},
 	Inspect: func(root parse.Node, _ []byte) []Finding {
 		var out []Finding
 		walkNodes(root, func(n parse.Node) {
-			if n.Type() != "special_variable" {
-				return
-			}
-			kw, ok := childType(n, "special_variable_keyword")
-			if !ok {
-				return
-			}
-			if name := strings.ToUpper(string(kw.Text())); name == "$SY" || name == "$SYSTEM" {
-				out = append(out, findNode(kw, "$SYSTEM access — restricted to Kernel package"))
+			switch n.Type() {
+			case "special_variable_keyword":
+				if name := strings.ToUpper(string(n.Text())); name == "$SY" || name == "$SYSTEM" {
+					out = append(out, findNode(n, "$SYSTEM access — restricted to Kernel package"))
+				}
+			case "global_variable":
+				if bytes.HasPrefix(n.Text(), []byte("^$")) {
+					out = append(out, findNode(n, "SSVN access (^$...) — structured system variables are restricted to Kernel"))
+				}
 			}
 		})
 		return out
@@ -942,7 +947,15 @@ var ruleExtendedReference = Rule{
 			if n.Type() != "global_variable" {
 				return
 			}
-			if t := n.Text(); bytes.ContainsAny(t, "|[") {
+			// The extended-reference marker (`^|env|gvn` / `^[...]gvn`) is in the
+			// NAME, before any subscripts. A `|`/`[` inside a subscript string
+			// (e.g. ^TMP("X",Y_" | Z |")) is not an extended reference — checking
+			// the whole node text was the dominant false positive.
+			name := n.Text()
+			if i := bytes.IndexByte(name, '('); i >= 0 {
+				name = name[:i]
+			}
+			if bytes.ContainsAny(name, "|[") {
 				out = append(out, findNode(n, "Extended reference — UCI/namespace-bound calls reduce portability"))
 			}
 		})
