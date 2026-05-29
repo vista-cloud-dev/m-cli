@@ -460,6 +460,7 @@ type coverageCmd struct {
 	Engine     string   `help:"Engine: ydb or iris. Else $M_ENGINE / heuristic; refuses (exit 4) if unresolved."`
 	Docker     string   `help:"Run inside this running container via docker exec (e.g. m-test-engine)."`
 	Routines   []string `help:"Extra source dirs to stage (e.g. m-stdlib/src). Repeatable."`
+	Namespace  string   `help:"IRIS namespace (default USER)."`
 	MinPercent float64  `name:"min-percent" help:"Fail (exit 3) if line coverage is below this percent."`
 	Lcov       string   `help:"Write an LCOV tracefile to this path."`
 }
@@ -515,19 +516,28 @@ func (c *coverageCmd) Run(cc *clikit.Context) error {
 
 	var eng engine.Engine
 	if c.Docker != "" {
-		stageDir := fmt.Sprintf("/m-work/m-cov-%d", time.Now().UnixNano())
 		files := append([]string{}, allFiles...)
 		for _, rdir := range c.Routines {
 			ms, _ := filepath.Glob(filepath.Join(rdir, "*.m"))
 			files = append(files, ms...)
 		}
-		if err := engine.DockerStage(ctx, c.Docker, stageDir, files); err != nil {
-			return clikit.Fail(clikit.ExitRuntime, "STAGE_FAILED", err.Error(), "")
+		if kind == engine.IRIS {
+			stageDir := fmt.Sprintf("/tmp/m-cov-%d", time.Now().UnixNano())
+			eng = engine.New(kind, engine.Options{Runner: engine.DockerRunner(c.Docker, ""), Namespace: c.Namespace})
+			if err := engine.IrisStageLoad(ctx, eng, c.Docker, stageDir, files); err != nil {
+				return clikit.Fail(clikit.ExitRuntime, "STAGE_FAILED", err.Error(), "")
+			}
+			defer engine.DockerUnstage(ctx, c.Docker, stageDir)
+		} else {
+			stageDir := fmt.Sprintf("/m-work/m-cov-%d", time.Now().UnixNano())
+			if err := engine.DockerStage(ctx, c.Docker, stageDir, files); err != nil {
+				return clikit.Fail(clikit.ExitRuntime, "STAGE_FAILED", err.Error(), "")
+			}
+			defer engine.DockerUnstage(ctx, c.Docker, stageDir)
+			eng = engine.New(kind, engine.Options{Runner: engine.DockerRunner(c.Docker, stageDir)})
 		}
-		defer engine.DockerUnstage(ctx, c.Docker, stageDir)
-		eng = engine.New(kind, engine.Options{Runner: engine.DockerRunner(c.Docker, stageDir)})
 	} else {
-		eng = engine.New(kind, engine.Options{})
+		eng = engine.New(kind, engine.Options{Namespace: c.Namespace})
 	}
 
 	result, err := mcov.Run(ctx, p, eng, routinePaths, suiteEntries)

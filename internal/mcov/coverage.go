@@ -12,6 +12,7 @@ package mcov
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -108,12 +109,21 @@ func parseYcov(stdout string) map[ycovKey]int {
 	return out
 }
 
-// Run enumerates executable lines in routinePaths, runs the suites under trace
-// on eng, and joins the ^ycov hits back to those lines.
+// Run enumerates executable lines in routinePaths, runs the suites under the
+// engine's line tracer, and joins per-line hits back to those lines. YDB uses
+// view "TRACE" → ^ycov (label-relative offsets); IRIS uses the LineByLine
+// monitor (absolute lines).
 func Run(ctx context.Context, p *parse.Parser, eng engine.Engine, routinePaths, suiteEntries []string) (Result, error) {
 	execs, err := DiscoverExecutables(p, routinePaths)
 	if err != nil {
 		return Result{}, err
+	}
+	if eng.Kind() == engine.IRIS {
+		names := make([]string, 0, len(routinePaths))
+		for _, rp := range routinePaths {
+			names = append(names, strings.ToUpper(strings.TrimSuffix(filepath.Base(rp), filepath.Ext(rp))))
+		}
+		return runIris(ctx, eng, execs, names, suiteEntries)
 	}
 	res, err := eng.RunScript(ctx, BuildScript(suiteEntries))
 	if err != nil {
