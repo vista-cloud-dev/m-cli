@@ -46,7 +46,7 @@ type CLI struct {
 	Lsp      lspCmd           `cmd:"" help:"Run the M language server (LSP 3.x over stdio)."`
 	Test     testCmd          `cmd:"" help:"Run *TST.m suites through the engine (^STDASSERT)."`
 	Coverage coverageCmd      `cmd:"" help:"Line coverage over the engine (YDB view \"TRACE\" → LCOV)."`
-	Watch    watchCmd         `cmd:"" help:"Re-run lint (and fmt-check) on M files as they change (static half)."`
+	Watch    watchCmd         `cmd:"" help:"Re-run lint/fmt (and, with --run, tests) on M files as they change."`
 	Version  versionCmd       `cmd:"" help:"Show version, Go toolchain, and embedded grammar hash."`
 	Schema   clikit.SchemaCmd `cmd:"" help:"Emit the command/flag/enum tree as JSON (agent discovery)."`
 
@@ -603,6 +603,46 @@ func (c *coverageCmd) Run(cc *clikit.Context) error {
 	return nil
 }
 
+// --- engine staging (shared by the engine-bound run paths) ------------------
+
+// stagedEngine is an engine plus, for the docker transport, a re-stage hook and
+// cleanup. It unifies engine-bound staging: YDB drops raw .m on $ydb_routines
+// (auto-compile); IRIS UDL-wraps + OBJ.Loads (no compile-from-path). restage
+// pushes a changed subset into the same stage dir — used by `m watch --run`.
+type stagedEngine struct {
+	eng     engine.Engine
+	restage func(files []string) error
+	cleanup func()
+}
+
+func newStagedEngine(ctx context.Context, kind engine.Kind, docker, namespace string, initialFiles []string) (*stagedEngine, error) {
+	if docker == "" {
+		return &stagedEngine{
+			eng:     engine.New(kind, engine.Options{Namespace: namespace}),
+			restage: func([]string) error { return nil },
+			cleanup: func() {},
+		}, nil
+	}
+	if kind == engine.IRIS {
+		stageDir := fmt.Sprintf("/tmp/m-eng-%d", time.Now().UnixNano())
+		eng := engine.New(kind, engine.Options{Runner: engine.DockerRunner(docker, ""), Namespace: namespace})
+		restage := func(files []string) error { return engine.IrisStageLoad(ctx, eng, docker, stageDir, files) }
+		if err := restage(initialFiles); err != nil {
+			return nil, err
+		}
+		return &stagedEngine{eng: eng, restage: restage, cleanup: func() { engine.DockerUnstage(ctx, docker, stageDir) }}, nil
+	}
+	stageDir := fmt.Sprintf("/m-work/m-eng-%d", time.Now().UnixNano())
+	if err := engine.DockerStage(ctx, docker, stageDir, initialFiles); err != nil {
+		return nil, err
+	}
+	return &stagedEngine{
+		eng:     engine.New(kind, engine.Options{Runner: engine.DockerRunner(docker, stageDir)}),
+		restage: func(files []string) error { return engine.DockerStage(ctx, docker, stageDir, files) },
+		cleanup: func() { engine.DockerUnstage(ctx, docker, stageDir) },
+	}, nil
+}
+
 // --- watch -------------------------------------------------------------------
 
 type watchCmd struct {
@@ -610,6 +650,13 @@ type watchCmd struct {
 	Profile  string   `default:"default" enum:"default,modern,all" help:"Lint rule profile."`
 	Interval int      `default:"500" help:"Poll interval in milliseconds."`
 	Fmt      bool     `help:"Also flag files that aren't canonically formatted."`
+
+	// Run half (engine-bound): re-run *TST.m suites on each change.
+	RunTests  bool     `name:"run" help:"Also run *TST.m suites on each change (the run half; needs an engine)."`
+	Engine    string   `help:"Engine for --run: ydb or iris (else $M_ENGINE / heuristic; exit 4 if unresolved)."`
+	Docker    string   `help:"Run --run suites inside this container via docker exec."`
+	Routines  []string `help:"Extra source dirs to stage for --run (e.g. m-stdlib/src). Repeatable."`
+	Namespace string   `help:"IRIS namespace for --run (default USER)."`
 }
 
 func (c *watchCmd) Run(cc *clikit.Context) error {
@@ -632,20 +679,58 @@ func (c *watchCmd) Run(cc *clikit.Context) error {
 	if len(paths) == 0 {
 		paths = []string{"."}
 	}
+
+	// Run-half setup (the engine-bound half of the bisection). Built once at
+	// startup; on each change we re-stage the changed files and re-run suites.
+	var staged *stagedEngine
+	var suites []mtest.TestSuite
+	if c.RunTests {
+		kind, explicit, err := engine.Resolve(engine.DetectConfig(c.Engine))
+		if err != nil {
+			return clikit.Fail(clikit.ExitUsage, "BAD_ENGINE", err.Error(), "use --engine ydb|iris")
+		}
+		if !explicit {
+			return clikit.Fail(clikit.ExitRefused, "ENGINE_UNRESOLVED",
+				"--run is engine-bound but no engine resolved",
+				"pass --engine ydb|iris, set $M_ENGINE, or run where IRIS is detected")
+		}
+		suites, err = mtest.Discover(p, paths)
+		if err != nil {
+			return clikit.Fail(clikit.ExitRuntime, "DISCOVER_FAILED", err.Error(), "")
+		}
+		files, _ := discover(paths)
+		for _, rdir := range c.Routines {
+			ms, _ := filepath.Glob(filepath.Join(rdir, "*.m"))
+			files = append(files, ms...)
+		}
+		staged, err = newStagedEngine(ctx, kind, c.Docker, c.Namespace, files)
+		if err != nil {
+			return clikit.Fail(clikit.ExitRuntime, "STAGE_FAILED", err.Error(), "")
+		}
+		defer staged.cleanup()
+	}
+
 	w := &watch.Watcher{
 		List:     func() ([]string, error) { return discover(paths) },
 		Interval: time.Duration(c.Interval) * time.Millisecond,
 	}
 
-	fmt.Fprintln(cc.Stdout, cc.Faint(fmt.Sprintf("watching %s (profile %s) — Ctrl+C to stop",
-		strings.Join(paths, ", "), c.Profile)))
+	mode := "lint"
+	if c.RunTests {
+		mode = "lint+run"
+	}
+	fmt.Fprintln(cc.Stdout, cc.Faint(fmt.Sprintf("watching %s (%s, profile %s) — Ctrl+C to stop",
+		strings.Join(paths, ", "), mode, c.Profile)))
 
 	onChange := func(ev watch.Event) {
 		for _, f := range ev.Removed {
 			fmt.Fprintf(cc.Stdout, "%s %s\n", cc.Faint(cc.Glyphs().Dot), cc.Faint(f+" removed"))
 		}
 		for _, f := range ev.Changed {
-			c.checkFile(ctx, cc, p, linter, f)
+			c.checkFile(ctx, cc, p, linter, f) // static half
+		}
+		if c.RunTests && len(ev.Changed) > 0 {
+			c.runHalf(ctx, cc, staged, suites, ev.Changed) // run half
 		}
 	}
 
@@ -655,6 +740,42 @@ func (c *watchCmd) Run(cc *clikit.Context) error {
 		return nil
 	}
 	return err
+}
+
+// runHalf re-stages the changed files and re-runs the suites through the engine,
+// printing a compact pass/fail summary (the engine-bound half of m watch).
+func (c *watchCmd) runHalf(ctx context.Context, cc *clikit.Context, staged *stagedEngine, suites []mtest.TestSuite, changed []string) {
+	if len(suites) == 0 {
+		return
+	}
+	if err := staged.restage(changed); err != nil {
+		fmt.Fprintln(cc.Stdout, "  "+cc.Failure("run: stage failed: "+err.Error()))
+		return
+	}
+	results, err := mtest.Run(ctx, staged.eng, suites)
+	if err != nil {
+		fmt.Fprintln(cc.Stdout, "  "+cc.Failure("run: "+err.Error()))
+		return
+	}
+	var pass, fail int
+	for _, r := range results {
+		if r.OK {
+			pass++
+		} else {
+			fail++
+		}
+	}
+	total := pass + fail
+	if fail == 0 {
+		fmt.Fprintln(cc.Stdout, "  "+cc.Success(fmt.Sprintf("tests: %d/%d suites ok", pass, total)))
+		return
+	}
+	fmt.Fprintln(cc.Stdout, "  "+cc.Failure(fmt.Sprintf("tests: %d/%d suites failed", fail, total)))
+	for _, r := range results {
+		if !r.OK {
+			fmt.Fprintf(cc.Stdout, "    %s\n", cc.Failure(r.Suite))
+		}
+	}
 }
 
 // checkFile lints (and optionally fmt-checks) one file and prints the result.
