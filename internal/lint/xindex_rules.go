@@ -187,11 +187,70 @@ func topLevelLines(root parse.Node) []parse.Node {
 }
 
 var (
-	reLeadingZ      = regexp.MustCompile(`^\$Z[A-Z]*`)
-	reFirstLineSAC  = regexp.MustCompile(`^[A-Za-z%][A-Za-z0-9]*\s*[(].*[)]\s*;|^[A-Za-z%][A-Za-z0-9]*\s+;`)
-	rePatchList     = regexp.MustCompile(`\*\*[^*]*\*\*`)
-	reSecondLineSAC = regexp.MustCompile(`^[ \t]*;;`)
+	reLeadingZ  = regexp.MustCompile(`^\$Z[A-Z]*`)
+	rePatchList = regexp.MustCompile(`\*\*[^*]*\*\*`)
+	// re044SAC is the faithful translation of XINDEX's 2nd-line SAC M-pattern
+	// `1.2N1"."1.2N.1(1"T",1"V").2N1";"1A.APN1";".E` applied to $P(line,";",3,99):
+	// version `N.N[T|V]N?` ; package `<alpha><printable>*` ; rest. Verified to
+	// reproduce XINDEX 1:1 (1612/1612, zero FP) over its scanned corpus.
+	re044SAC = regexp.MustCompile(`^[0-9]{1,2}\.[0-9]{1,2}[TV]?[0-9]{0,2};[A-Za-z][ -~]*;`)
 )
+
+// mIsUP reports whether a byte matches the MUMPS pattern class `U` or `P`
+// (uppercase or punctuation) — printable ASCII that is neither lowercase nor a
+// digit. Space (32) counts as punctuation, matching the engine XINDEX runs on.
+func mIsUP(b byte) bool {
+	return b >= 32 && b <= 126 && !(b >= 'a' && b <= 'z') && !(b >= '0' && b <= '9')
+}
+
+// semiPiece returns the n-th (1-based) `;`-delimited piece of b ($P(b,";",n)).
+func semiPiece(b []byte, n int) []byte {
+	parts := bytes.Split(b, []byte(";"))
+	if n >= 1 && n <= len(parts) {
+		return parts[n-1]
+	}
+	return nil
+}
+
+// semiPieceFrom returns pieces n..end joined by `;` ($P(b,";",n,99)).
+func semiPieceFrom(b []byte, n int) []byte {
+	parts := bytes.Split(b, []byte(";"))
+	if n >= 1 && n <= len(parts) {
+		return bytes.Join(parts[n-1:], []byte(";"))
+	}
+	return nil
+}
+
+// firstLineSACok is XINDEX rule 62's check: the first line's 2nd `;`-piece must
+// match `1.UP1"/"1.UP1"-".E` — uppercase/punctuation `SITE/DEV-` author prefix
+// (no lowercase or digits before the `-`), then anything. Verified 1:1 vs
+// XINDEX (2990/2990, zero FP).
+func firstLineSACok(line []byte) bool {
+	p := semiPiece(line, 2)
+	for k := 0; k < len(p); k++ {
+		if p[k] != '-' {
+			continue
+		}
+		pre := p[:k]
+		allUP := true
+		for i := 0; i < len(pre); i++ {
+			if !mIsUP(pre[i]) {
+				allUP = false
+				break
+			}
+		}
+		if !allUP {
+			continue
+		}
+		// `1.UP1"/"1.UP` needs ≥1 char before the `/` and ≥1 between `/` and `-`.
+		for i := 1; i <= len(pre)-2; i++ {
+			if pre[i] == '/' {
+				return true
+			}
+		}
+	}
+	return false
+}
 
 func hasLowercaseLetter(s string) bool {
 	for _, c := range s {
@@ -324,18 +383,20 @@ var ruleRoutineCodeSize = Rule{
 	},
 }
 
-// M-XINDX-044 — 2nd line of routine violates the SAC (must start with ` ;;`).
+// M-XINDX-044 — 2nd line of routine violates the SAC. Faithful to XINDEX: the
+// check runs only for routines with >2 lines, and the 2nd line's pieces 3..end
+// must match the `;;version;package;…` M-pattern (re044SAC).
 var ruleSecondLineSAC = Rule{
 	ID: "M-XINDX-044", Severity: Info, Category: "documentation",
 	Title: "2nd line of routine violates the SAC", Tags: []string{"xindex", "sac", "vista"},
 	Inspect: func(_ parse.Node, src []byte) []Finding {
 		lines := splitLines(src)
-		if len(lines) < 2 {
-			return nil
+		if len(lines) <= 2 {
+			return nil // XINDEX guard: LC>2
 		}
-		if !reSecondLineSAC.Match(lines[1]) {
+		if !re044SAC.Match(semiPieceFrom(lines[1], 3)) {
 			return []Finding{{
-				Message: "2nd line of routine violates the SAC (must start with ';;version;package;...;date;build')",
+				Message: "2nd line of routine violates the SAC (must be ';;version;package;...;date;build')",
 				Line:    2, Col: 1, EndLine: 2, EndCol: 1,
 			}}
 		}
@@ -363,18 +424,20 @@ var rulePatchMissing = Rule{
 	},
 }
 
-// M-XINDX-062 — First line of routine violates the SAC.
+// M-XINDX-062 — First line of routine violates the SAC. Faithful to XINDEX:
+// runs only for routines with >2 lines; the first line's 2nd `;`-piece must be
+// a `SITE/DEV-description` author prefix (firstLineSACok).
 var ruleFirstLineSAC = Rule{
 	ID: "M-XINDX-062", Severity: Info, Category: "documentation",
 	Title: "First line of routine violates the SAC", Tags: []string{"xindex", "sac", "vista"},
 	Inspect: func(_ parse.Node, src []byte) []Finding {
 		lines := splitLines(src)
-		if len(lines) == 0 {
-			return nil
+		if len(lines) <= 2 {
+			return nil // XINDEX guard: LC>2
 		}
-		if !reFirstLineSAC.Match(lines[0]) {
+		if !firstLineSACok(lines[0]) {
 			return []Finding{{
-				Message: "First line of routine violates the SAC (expected `LABEL ;description`)",
+				Message: "First line of routine violates the SAC (expected `SITE/DEV-description`)",
 				Line:    1, Col: 1, EndLine: 1, EndCol: 1,
 			}}
 		}

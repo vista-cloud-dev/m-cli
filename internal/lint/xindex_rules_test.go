@@ -191,6 +191,42 @@ func TestXindexProfileMembership(t *testing.T) {
 	}
 }
 
+// M-XINDX-062 / 044 reproduce XINDEX's real SAC-line M-patterns (validated 1:1
+// against the VistA corpus ground truth): first line needs a SITE/DEV-
+// uppercase author prefix; 2nd line needs ;;version;package;…; both skip
+// routines of <=2 lines (the XINDEX LC>2 guard).
+func TestXindexSACLines(t *testing.T) {
+	// Clean: real-world compliant header (A2APATCK shape) — neither fires.
+	clean := "A2APATCK ;WASH/PEH - CHECK PATCHED ROUTINES ;2/13/01\n ;;1.0;TEST;;20260529\n Q\n"
+	f := lintX(t, clean, "A2APATCK")
+	if countRuleID(f, "M-XINDX-062") != 0 || countRuleID(f, "M-XINDX-044") != 0 {
+		t.Errorf("compliant header should pass 062/044, got %+v", f)
+	}
+
+	// First line with no SITE/DEV- author prefix (digits/spaces, no `/...-`) → 062.
+	bad62 := "A2APCOPY ;JA/WASH COPY PATCHES(11005) TO 1200035 ;11/17/98\n ;;1.0;TEST;;1\n Q\n"
+	if countRuleID(lintX(t, bad62, "A2APCOPY"), "M-XINDX-062") != 1 {
+		t.Errorf("non-SAC first line should fire 062 once on %q", bad62)
+	}
+
+	// 2nd line without the ;;version;package; structure → 044 (and 062 stays clean).
+	bad44 := "A2APATCK ;WASH/PEH - CHECK ROUTINES ;2/13/01\n ;;1.0\n Q\n"
+	g := lintX(t, bad44, "A2APATCK")
+	if countRuleID(g, "M-XINDX-044") != 1 {
+		t.Errorf("non-SAC 2nd line should fire 044 once, got %+v", g)
+	}
+	if countRuleID(g, "M-XINDX-062") != 0 {
+		t.Errorf("compliant first line should not fire 062, got %+v", g)
+	}
+
+	// <=2 lines: the LC>2 guard suppresses both even with non-compliant lines.
+	short := "BAR ;junk no slash\n ;;bad\n"
+	h := lintX(t, short, "BAR")
+	if countRuleID(h, "M-XINDX-062") != 0 || countRuleID(h, "M-XINDX-044") != 0 {
+		t.Errorf("<=2-line routine should be exempt (LC>2 guard), got %+v", h)
+	}
+}
+
 func ruleIDSet(rules []lint.Rule) map[string]bool {
 	m := map[string]bool{}
 	for _, r := range rules {
