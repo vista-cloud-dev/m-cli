@@ -226,7 +226,7 @@ func isMFile(path string) bool {
 
 type lintCmd struct {
 	Paths     []string `arg:"" optional:"" type:"path" help:"Files or directories to lint (default: .)."`
-	Profile   string   `default:"default" enum:"default,modern,all" help:"Rule profile."`
+	Profile   string   `default:"default" enum:"default,modern,pythonic,pedantic,all" help:"Rule profile."`
 	Check     bool     `help:"Exit 3 if there are any findings (CI gate)."`
 	ListRules bool     `help:"List the rules in the selected profile (then exit)."`
 }
@@ -234,8 +234,9 @@ type lintCmd struct {
 type ruleDoc struct {
 	ID       string   `json:"id"`
 	Severity string   `json:"severity"`
-	Profiles []string `json:"profiles"`
-	Doc      string   `json:"doc"`
+	Category string   `json:"category,omitempty"`
+	Tags     []string `json:"tags"`
+	Title    string   `json:"title"`
 }
 
 func (c *lintCmd) Run(cc *clikit.Context) error {
@@ -244,12 +245,12 @@ func (c *lintCmd) Run(cc *clikit.Context) error {
 	if c.ListRules {
 		docs := make([]ruleDoc, 0, len(rules))
 		for _, r := range rules {
-			docs = append(docs, ruleDoc{ID: r.ID, Severity: string(r.Severity), Profiles: r.Profiles, Doc: r.Doc})
+			docs = append(docs, ruleDoc{ID: r.ID, Severity: string(r.Severity), Category: r.Category, Tags: r.Tags, Title: r.Title})
 		}
 		return cc.Result(docs, func() {
 			cc.Title("lint rules — profile " + c.Profile)
 			for _, d := range docs {
-				fmt.Fprintf(cc.Stdout, "  %s  %s  %s\n", cc.Accent(d.ID), cc.Faint(d.Severity), d.Doc)
+				fmt.Fprintf(cc.Stdout, "  %s  %s  %s\n", cc.Accent(d.ID), cc.Faint(d.Severity), d.Title)
 			}
 		})
 	}
@@ -647,7 +648,7 @@ func newStagedEngine(ctx context.Context, kind engine.Kind, docker, namespace st
 
 type watchCmd struct {
 	Paths    []string `arg:"" optional:"" type:"path" help:"Files or directories to watch (default: .)."`
-	Profile  string   `default:"default" enum:"default,modern,all" help:"Lint rule profile."`
+	Profile  string   `default:"default" enum:"default,modern,pythonic,pedantic,all" help:"Lint rule profile."`
 	Interval int      `default:"500" help:"Poll interval in milliseconds."`
 	Fmt      bool     `help:"Also flag files that aren't canonically formatted."`
 
