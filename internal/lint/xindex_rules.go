@@ -653,6 +653,13 @@ var ruleReadNoTimeout = Rule{
 				return
 			}
 			for _, arg := range cmdArguments(cmd) {
+				// Only a variable read (`R X`) blocks and needs a :timeout. Format
+				// controls (`!`, `#`, `?n`), string prompts, and `*X`/`#` reads are
+				// not blocking variable reads — XINDEX doesn't flag them either.
+				p, ok := argPayload(arg)
+				if !ok || p.Type() != "variable" {
+					continue
+				}
 				if !argHasTimeout(arg) {
 					out = append(out, findNode(kwNode, "READ command does not have a :timeout (will block indefinitely)"))
 					break
@@ -674,6 +681,14 @@ var ruleLockNoTimeout = Rule{
 				return
 			}
 			for _, arg := range cmdArguments(cmd) {
+				// A lock RELEASE (`L -^X`) never blocks, so it needs no timeout —
+				// only acquires (`L ^X` / `L +^X`) do. XINDEX flags acquires only.
+				p, ok := argPayload(arg)
+				if ok && p.Type() == "unary_expression" {
+					if op, ok2 := childType(p, "operator"); ok2 && string(op.Text()) == "-" {
+						continue
+					}
+				}
 				if !argHasTimeout(arg) {
 					out = append(out, findNode(kwNode, "LOCK missing :timeout (will block indefinitely)"))
 					break
@@ -792,20 +807,23 @@ var ruleLabelOffset = Rule{
 				return
 			}
 			for _, arg := range cmdArguments(cmd) {
+				// Only the entry reference itself being `TAG+offset` is label+offset:
+				// the arg's TOP-LEVEL payload is a binary_expression `+` whose LHS is a
+				// label-shaped variable. Do NOT walk descendants — `D UP((I+2),...)` is
+				// argument arithmetic, not a label offset (the dominant false positive).
 				p, ok := argPayload(arg)
-				if !ok {
+				if !ok || p.Type() != "binary_expression" || p.ChildCount() == 0 {
 					continue
 				}
-				flagged := false
-				walkNodes(p, func(sub parse.Node) {
-					if flagged || sub.Type() != "binary_expression" {
-						return
-					}
-					if op, ok := childType(sub, "operator"); ok && string(op.Text()) == "+" {
-						out = append(out, findNode(sub, "LABEL+OFFSET syntax — offset-dependent calls are fragile"))
-						flagged = true
-					}
-				})
+				// LHS must be a label: a named label (`TAG+1` → variable) or a
+				// numeric label (`33+1` → number). Argument arithmetic like
+				// `D UP((I+2),...)` has a non-binary_expression top-level payload.
+				if lhs := p.Child(0).Type(); lhs != "variable" && lhs != "number" {
+					continue
+				}
+				if op, ok := childType(p, "operator"); ok && string(op.Text()) == "+" {
+					out = append(out, findNode(p, "LABEL+OFFSET syntax — offset-dependent calls are fragile"))
+				}
 			}
 		})
 		return out

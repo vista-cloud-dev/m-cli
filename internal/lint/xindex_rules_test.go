@@ -227,6 +227,37 @@ func TestXindexSACLines(t *testing.T) {
 	}
 }
 
+// Precision fixes found by the corpus differential: 033/060/030 must not
+// over-fire on non-blocking args / argument arithmetic.
+func TestXindexPrecisionFixes(t *testing.T) {
+	// 033: format/string args and a timed variable read are clean; only a bare
+	// variable read without a timeout fires.
+	if n := countRuleID(lintX(t, "FOO ;\n R !,\"prompt\",X:999,!\n Q\n", "FOO"), "M-XINDX-033"); n != 0 {
+		t.Errorf("033 should not flag format/string args when the var read has a timeout, got %d", n)
+	}
+	if n := countRuleID(lintX(t, "FOO ;\n R X\n Q\n", "FOO"), "M-XINDX-033"); n != 1 {
+		t.Errorf("033 should still flag a bare variable read with no timeout, got %d", n)
+	}
+	// 060: a lock RELEASE needs no timeout; an acquire without one still fires.
+	if n := countRuleID(lintX(t, "FOO ;\n L -^X\n Q\n", "FOO"), "M-XINDX-060"); n != 0 {
+		t.Errorf("060 should not flag a lock release, got %d", n)
+	}
+	if n := countRuleID(lintX(t, "FOO ;\n L ^X\n Q\n", "FOO"), "M-XINDX-060"); n != 1 {
+		t.Errorf("060 should still flag an acquire with no timeout, got %d", n)
+	}
+	// 030: argument arithmetic is not a label offset; a real TAG+offset still fires.
+	if n := countRuleID(lintX(t, "FOO ;\n D UP((I+2),X)\n Q\n", "FOO"), "M-XINDX-030"); n != 0 {
+		t.Errorf("030 should not flag argument arithmetic D UP((I+2),...), got %d", n)
+	}
+	if n := countRuleID(lintX(t, "FOO ;\n D TAG+1\n Q\n", "FOO"), "M-XINDX-030"); n != 1 {
+		t.Errorf("030 should still flag a real TAG+offset, got %d", n)
+	}
+	// Numeric-label offset (`G 33+1`) is also label+offset (real corpus case).
+	if n := countRuleID(lintX(t, "FOO ;\n33 W 1\n G 33+1\n", "FOO"), "M-XINDX-030"); n != 1 {
+		t.Errorf("030 should flag a numeric-label offset G 33+1, got %d", n)
+	}
+}
+
 func ruleIDSet(rules []lint.Rule) map[string]bool {
 	m := map[string]bool{}
 	for _, r := range rules {
