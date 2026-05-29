@@ -126,6 +126,21 @@ func OptionsFromConfig(cfg config.Config) Options {
 	return opts
 }
 
+// ResolveFilter layers rule selection identically for every entry point — the
+// CLI lint/watch commands and the LSP — so the editor and CI can never drift
+// (G2 diagnostic parity): an explicitly-set non-default --profile flag wins;
+// otherwise the config's [lint] rules; otherwise the "default" profile. Callers
+// with no profile flag (the LSP) pass "".
+func ResolveFilter(profileFlag string, cfg config.Config) string {
+	if profileFlag != "" && profileFlag != "default" {
+		return profileFlag
+	}
+	if cfg.LintRules != "" {
+		return cfg.LintRules
+	}
+	return "default"
+}
+
 // Resolve turns a rule filter (a profile name, or a comma-list mixing profile
 // names and rule IDs) plus build Options into the final rule set: profile/ID
 // selection, then [lint] disable drops rules, then [lint.severity] re-stamps

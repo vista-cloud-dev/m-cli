@@ -249,17 +249,10 @@ func loadProjectConfig(configFlag string) (config.Config, error) {
 	return config.LoadConfig(cwd)
 }
 
-// resolveLintFilter layers the rule selection: an explicitly-set --profile flag
-// wins; otherwise the config's [lint] rules; otherwise the default profile. The
-// flag default is "default", so a non-"default" flag is treated as explicit.
+// resolveLintFilter delegates to lint.ResolveFilter — the single rule-selection
+// resolver shared by the CLI, watch, and the LSP so editor and CI never drift.
 func resolveLintFilter(profileFlag string, cfg config.Config) string {
-	if profileFlag != "" && profileFlag != "default" {
-		return profileFlag
-	}
-	if cfg.LintRules != "" {
-		return cfg.LintRules
-	}
-	return "default"
+	return lint.ResolveFilter(profileFlag, cfg)
 }
 
 // --- lint --------------------------------------------------------------------
