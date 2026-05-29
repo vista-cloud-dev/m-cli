@@ -27,6 +27,7 @@ import (
 	"github.com/willabides/kongplete"
 
 	"github.com/vista-cloud-dev/m-cli/clikit"
+	"github.com/vista-cloud-dev/m-cli/internal/config"
 	"github.com/vista-cloud-dev/m-cli/internal/engine"
 	"github.com/vista-cloud-dev/m-cli/internal/lint"
 	"github.com/vista-cloud-dev/m-cli/internal/lsp"
@@ -65,11 +66,12 @@ func main() {
 // --- fmt ---------------------------------------------------------------------
 
 type fmtCmd struct {
-	Paths []string `arg:"" optional:"" type:"path" help:"Files or directories to format (default: .)."`
-	Rules string   `default:"identity" enum:"identity,canonical" help:"Rule preset: identity (no-op) or canonical."`
-	Check bool     `help:"Report files needing formatting; exit 3 if any (no writes)."`
-	Write bool     `short:"w" help:"Rewrite changed files in place."`
-	Stdin bool     `help:"Format stdin → stdout (raw; ignores paths and --output)."`
+	Paths  []string `arg:"" optional:"" type:"path" help:"Files or directories to format (default: .)."`
+	Rules  string   `default:"identity" enum:"identity,canonical" help:"Rule preset: identity (no-op) or canonical (overrides [fmt] rules)."`
+	Config string   `type:"path" help:"Path to a .m-cli.toml / pyproject.toml (else discovered by walking up from CWD)."`
+	Check  bool     `help:"Report files needing formatting; exit 3 if any (no writes)."`
+	Write  bool     `short:"w" help:"Rewrite changed files in place."`
+	Stdin  bool     `help:"Format stdin → stdout (raw; ignores paths and --output)."`
 }
 
 type fmtResult struct {
@@ -87,7 +89,17 @@ func (c *fmtCmd) Run(cc *clikit.Context) error {
 	}
 	defer func() { _ = p.Close(ctx) }()
 
-	rules := mfmt.Rules(mfmt.Preset(c.Rules))
+	cfg, err := loadProjectConfig(c.Config)
+	if err != nil {
+		return clikit.Fail(clikit.ExitUsage, "BAD_CONFIG", err.Error(), "")
+	}
+	// Layering: an explicitly-set --rules flag wins; otherwise [fmt] rules;
+	// otherwise the identity preset. The flag default is "identity".
+	rulesName := c.Rules
+	if rulesName == "identity" && cfg.FmtRules != "" {
+		rulesName = cfg.FmtRules
+	}
+	rules := mfmt.Rules(mfmt.Preset(rulesName))
 
 	// --stdin: behave as a filter — raw formatted bytes to stdout.
 	if c.Stdin {
@@ -112,7 +124,7 @@ func (c *fmtCmd) Run(cc *clikit.Context) error {
 		return clikit.Fail(clikit.ExitRuntime, "DISCOVER_FAILED", err.Error(), "")
 	}
 
-	res := fmtResult{Rules: c.Rules, Scanned: len(files)}
+	res := fmtResult{Rules: rulesName, Scanned: len(files)}
 	for _, f := range files {
 		src, err := os.ReadFile(f)
 		if err != nil {
@@ -222,11 +234,39 @@ func isMFile(path string) bool {
 	return false
 }
 
+// loadProjectConfig resolves the project config: an explicit --config path is
+// loaded directly; otherwise discovery walks up from the current directory. A
+// malformed/invalid config is a hard usage error (faithful to the Python tool).
+func loadProjectConfig(configFlag string) (config.Config, error) {
+	if configFlag != "" {
+		return config.LoadFile(configFlag)
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return config.Config{}, nil
+	}
+	return config.LoadConfig(cwd)
+}
+
+// resolveLintFilter layers the rule selection: an explicitly-set --profile flag
+// wins; otherwise the config's [lint] rules; otherwise the default profile. The
+// flag default is "default", so a non-"default" flag is treated as explicit.
+func resolveLintFilter(profileFlag string, cfg config.Config) string {
+	if profileFlag != "" && profileFlag != "default" {
+		return profileFlag
+	}
+	if cfg.LintRules != "" {
+		return cfg.LintRules
+	}
+	return "default"
+}
+
 // --- lint --------------------------------------------------------------------
 
 type lintCmd struct {
 	Paths     []string `arg:"" optional:"" type:"path" help:"Files or directories to lint (default: .)."`
-	Profile   string   `default:"default" enum:"default,modern,pythonic,pedantic,all" help:"Rule profile."`
+	Profile   string   `default:"default" enum:"default,modern,pythonic,pedantic,all" help:"Rule profile (overrides [lint] rules)."`
+	Config    string   `type:"path" help:"Path to a .m-cli.toml / pyproject.toml (else discovered by walking up from CWD)."`
 	Check     bool     `help:"Exit 3 if there are any findings (CI gate)."`
 	ListRules bool     `help:"List the rules in the selected profile (then exit)."`
 }
@@ -240,7 +280,20 @@ type ruleDoc struct {
 }
 
 func (c *lintCmd) Run(cc *clikit.Context) error {
-	rules := lint.Profile(c.Profile)
+	cfg, err := loadProjectConfig(c.Config)
+	if err != nil {
+		return clikit.Fail(clikit.ExitUsage, "BAD_CONFIG", err.Error(), "")
+	}
+	opts := lint.OptionsFromConfig(cfg)
+	filter := resolveLintFilter(c.Profile, cfg)
+	rules, err := lint.Resolve(filter, opts)
+	if err != nil {
+		return clikit.Fail(clikit.ExitUsage, "BAD_PROFILE", err.Error(), "")
+	}
+	if len(rules) == 0 {
+		return clikit.Fail(clikit.ExitUsage, "NO_RULES",
+			fmt.Sprintf("no rules matched --profile/rules %q", filter), "")
+	}
 
 	if c.ListRules {
 		docs := make([]ruleDoc, 0, len(rules))
@@ -248,7 +301,7 @@ func (c *lintCmd) Run(cc *clikit.Context) error {
 			docs = append(docs, ruleDoc{ID: r.ID, Severity: string(r.Severity), Category: r.Category, Tags: r.Tags, Title: r.Title})
 		}
 		return cc.Result(docs, func() {
-			cc.Title("lint rules — profile " + c.Profile)
+			cc.Title("lint rules — " + filter)
 			for _, d := range docs {
 				fmt.Fprintf(cc.Stdout, "  %s  %s  %s\n", cc.Accent(d.ID), cc.Faint(d.Severity), d.Title)
 			}
@@ -303,7 +356,7 @@ func (c *lintCmd) Run(cc *clikit.Context) error {
 				cc.Severity(d.Severity), d.File, d.Line, d.Col, cc.Faint(d.Rule), d.Message)
 		}
 		if len(diags) == 0 {
-			fmt.Fprintln(cc.Stdout, cc.Success(fmt.Sprintf("no findings (%d files, profile %s)", len(files), c.Profile)))
+			fmt.Fprintln(cc.Stdout, cc.Success(fmt.Sprintf("no findings (%d files, %s)", len(files), filter)))
 		} else {
 			fmt.Fprintln(cc.Stdout, cc.Faint(fmt.Sprintf("%d finding(s) in %d file(s)", len(diags), len(files))))
 		}
@@ -648,7 +701,8 @@ func newStagedEngine(ctx context.Context, kind engine.Kind, docker, namespace st
 
 type watchCmd struct {
 	Paths    []string `arg:"" optional:"" type:"path" help:"Files or directories to watch (default: .)."`
-	Profile  string   `default:"default" enum:"default,modern,pythonic,pedantic,all" help:"Lint rule profile."`
+	Profile  string   `default:"default" enum:"default,modern,pythonic,pedantic,all" help:"Lint rule profile (overrides [lint] rules)."`
+	Config   string   `type:"path" help:"Path to a .m-cli.toml / pyproject.toml (else discovered by walking up from CWD)."`
 	Interval int      `default:"500" help:"Poll interval in milliseconds."`
 	Fmt      bool     `help:"Also flag files that aren't canonically formatted."`
 
@@ -670,7 +724,16 @@ func (c *watchCmd) Run(cc *clikit.Context) error {
 	}
 	defer func() { _ = p.Close(context.Background()) }()
 
-	linter, err := lint.NewLinter(p, lint.Profile(c.Profile))
+	cfg, err := loadProjectConfig(c.Config)
+	if err != nil {
+		return clikit.Fail(clikit.ExitUsage, "BAD_CONFIG", err.Error(), "")
+	}
+	filter := resolveLintFilter(c.Profile, cfg)
+	rules, err := lint.Resolve(filter, lint.OptionsFromConfig(cfg))
+	if err != nil {
+		return clikit.Fail(clikit.ExitUsage, "BAD_PROFILE", err.Error(), "")
+	}
+	linter, err := lint.NewLinter(p, rules)
 	if err != nil {
 		return clikit.Fail(clikit.ExitRuntime, "RULE_COMPILE", err.Error(), "")
 	}
@@ -720,8 +783,8 @@ func (c *watchCmd) Run(cc *clikit.Context) error {
 	if c.RunTests {
 		mode = "lint+run"
 	}
-	fmt.Fprintln(cc.Stdout, cc.Faint(fmt.Sprintf("watching %s (%s, profile %s) — Ctrl+C to stop",
-		strings.Join(paths, ", "), mode, c.Profile)))
+	fmt.Fprintln(cc.Stdout, cc.Faint(fmt.Sprintf("watching %s (%s, %s) — Ctrl+C to stop",
+		strings.Join(paths, ", "), mode, filter)))
 
 	onChange := func(ev watch.Event) {
 		for _, f := range ev.Removed {

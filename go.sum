@@ -1,3 +1,5 @@
+github.com/BurntSushi/toml v1.6.0 h1:dRaEfpa2VI55EwlIW72hMRHdWouJeRF7TPYhI+AUQjk=
+github.com/BurntSushi/toml v1.6.0/go.mod h1:ukJfTF/6rtPPRCnwkur4qwRxa8vTRFBF0uk2lLoLwho=
 github.com/alecthomas/assert/v2 v2.11.0 h1:2Q9r3ki8+JYXvGsDyBXwH3LcJ+WK5D0gc5E8vS6K3D0=
 github.com/alecthomas/assert/v2 v2.11.0/go.mod h1:Bze95FyfUr7x34QZrjL+XP+0qgp/zg8yS+TtBj1WA3k=
 github.com/alecthomas/kong v1.15.0 h1:BVJstKbpO73zKpmIu+m/aLRrNmWwxXPIGTNin9VmLVI=
@@ -54,8 +56,6 @@ github.com/stretchr/testify v1.8.4 h1:CcVxjf3Q8PM0mHUKJCdn+eZZtm5yQwehR5yeSVQQcU
 github.com/stretchr/testify v1.8.4/go.mod h1:sz/lmYIOXD/1dqDmKjjqLyZ2RngseejIcXlSw2iwfAo=
 github.com/tetratelabs/wazero v1.11.0 h1:+gKemEuKCTevU4d7ZTzlsvgd1uaToIDtlQlmNbwqYhA=
 github.com/tetratelabs/wazero v1.11.0/go.mod h1:eV28rsN8Q+xwjogd7f4/Pp4xFxO7uOGbLcD/LzB1wiU=
-github.com/vista-cloud-dev/m-parse v0.0.0-20260528183204-13ecf18b4a36 h1:0mFazNYP4eokIH4o10PQoMuf4x3dGC/Bc1gT8CrB90A=
-github.com/vista-cloud-dev/m-parse v0.0.0-20260528183204-13ecf18b4a36/go.mod h1:XAG984cMiUq5ST14W3YvlZP9iMIURPWond2TjvEsDIY=
 github.com/vista-cloud-dev/m-parse v0.0.0-20260528192609-d8a6166546d4 h1:+kj1Xk81A/OV8BYmgGmLe11C1n3QcphPOyvYKXvcg0k=
 github.com/vista-cloud-dev/m-parse v0.0.0-20260528192609-d8a6166546d4/go.mod h1:XAG984cMiUq5ST14W3YvlZP9iMIURPWond2TjvEsDIY=
 github.com/willabides/kongplete v0.4.0 h1:eivXxkp5ud5+4+NVN9e4goxC5mSh3n1RHov+gsblM2g=

@@ -6,11 +6,11 @@ package lint
 // reaching-defs analysis cannot see, so a read of one is a guaranteed false
 // positive in any VistA context.
 //
-// Unlike the Python tool — which gates this behind [lint.vista] kernel_locals
-// because modern non-VA code shouldn't get a free pass on these names — the Go
-// tool applies the allowlist unconditionally: there is no lint config plumbing
-// yet, and these ~50 names are so VistA-specific that an undefined read of one
-// in a non-VA project is vanishingly rare. Revisit when [lint.vista] lands.
+// Faithful to the Python tool, this allowlist is OFF by default and gated behind
+// [lint.vista] kernel_locals: non-VA code shouldn't get a free pass on these
+// names. M-MOD-024 receives this map only when the config opts in with
+// kernel_locals = "default" (see OptionsFromConfig / DefaultKernelLocals); with
+// no config or an explicit name list, M-MOD-024 stays strict / uses that list.
 var kernelAutoDefined = func() map[string]bool {
 	names := []string{
 		// The universal field separator — Kernel sets it to $C(94) at every
@@ -39,3 +39,13 @@ var kernelAutoDefined = func() map[string]bool {
 	}
 	return m
 }()
+
+// DefaultKernelLocals returns a copy of the built-in VistA Kernel auto-defined
+// allowlist — the set [lint.vista] kernel_locals = "default" opts in to.
+func DefaultKernelLocals() map[string]bool {
+	m := make(map[string]bool, len(kernelAutoDefined))
+	for k := range kernelAutoDefined {
+		m[k] = true
+	}
+	return m
+}

@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/vista-cloud-dev/m-cli/internal/config"
 )
 
 func TestIsMFile(t *testing.T) {
@@ -51,5 +53,27 @@ func TestDiscover(t *testing.T) {
 	}
 	if len(files) != 1 || files[0] != odd {
 		t.Errorf("discover explicit file: got %v, want [%s]", files, odd)
+	}
+}
+
+func TestResolveLintFilter(t *testing.T) {
+	cases := []struct {
+		name    string
+		flag    string
+		cfgRule string
+		want    string
+	}{
+		{"flag wins over config", "modern", "all", "modern"},
+		{"config when flag is default", "default", "all", "all"},
+		{"config comma-list", "default", "M-MOD-001,M-STY-001", "M-MOD-001,M-STY-001"},
+		{"default when neither set", "default", "", "default"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := resolveLintFilter(tc.flag, config.Config{LintRules: tc.cfgRule})
+			if got != tc.want {
+				t.Errorf("resolveLintFilter(%q, rules=%q) = %q, want %q", tc.flag, tc.cfgRule, got, tc.want)
+			}
+		})
 	}
 }

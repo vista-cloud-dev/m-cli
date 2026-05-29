@@ -100,38 +100,42 @@ var ruleStaleTest = Rule{
 // per-label CFG; a use of a name not in the definitely-defined set entering its
 // block (and not defined by an earlier argument of the same command) is flagged.
 // Formals are defined at entry; by-reference DO/JOB params are defs. One finding
-// per (label, variable). The VistA Kernel auto-defined locals are suppressed
-// unconditionally (see vista_kernel.go), and the IF $G(X)="" SET X idiom is
-// honored. FP-prone by nature, so it carries the pedantic tag — excluded from
-// the curated `default` profile but present in modern/pythonic/pedantic/all.
-var ruleReadOfUndefined = Rule{
-	ID:       "M-MOD-024",
-	Severity: Error,
-	Category: "bug",
-	Title:    "Read of local variable before definite assignment",
-	Tags:     []string{"modern", "pedantic"},
-	Inspect: func(root parse.Node, src []byte) []Finding {
-		formalsByRow := flow.FormalParams(root, src)
-		var out []Finding
-		for _, cfg := range flow.BuildCFGs(root, src) {
-			reported := map[string]bool{}
-			for _, r := range flow.UndefinedReads(cfg, src, formalsByRow[cfg.LabelRow]) {
-				if reported[r.Name] || kernelAutoDefined[r.Name] {
-					continue
+// per (label, variable). The IF $G(X)="" SET X idiom is honored. A nil kernel
+// allowlist means strict (every undefined read flagged); pass a non-nil set
+// (e.g. via [lint.vista] kernel_locals = "default") to suppress VistA Kernel
+// auto-defined locals the static reaching-defs analysis cannot see. FP-prone by
+// nature, so it carries the pedantic tag — excluded from the curated `default`
+// profile but present in modern/pythonic/pedantic/all.
+func ruleReadOfUndefined(kernel map[string]bool) Rule {
+	return Rule{
+		ID:       "M-MOD-024",
+		Severity: Error,
+		Category: "bug",
+		Title:    "Read of local variable before definite assignment",
+		Tags:     []string{"modern", "pedantic"},
+		Inspect: func(root parse.Node, src []byte) []Finding {
+			formalsByRow := flow.FormalParams(root, src)
+			var out []Finding
+			for _, cfg := range flow.BuildCFGs(root, src) {
+				reported := map[string]bool{}
+				for _, r := range flow.UndefinedReads(cfg, src, formalsByRow[cfg.LabelRow]) {
+					if reported[r.Name] || kernel[r.Name] {
+						continue
+					}
+					reported[r.Name] = true
+					out = append(out, Finding{
+						Message: fmt.Sprintf("local %q may be read before being definitely defined "+
+							"on every path from %s", r.Name, r.Label),
+						Line:    r.Line,
+						Col:     r.Col,
+						EndLine: r.Line,
+						EndCol:  r.EndCol,
+					})
 				}
-				reported[r.Name] = true
-				out = append(out, Finding{
-					Message: fmt.Sprintf("local %q may be read before being definitely defined "+
-						"on every path from %s", r.Name, r.Label),
-					Line:    r.Line,
-					Col:     r.Col,
-					EndLine: r.Line,
-					EndCol:  r.EndCol,
-				})
 			}
-		}
-		return out
-	},
+			return out
+		},
+	}
 }
 
 // M-MOD-036 — untrusted data flows into an indirection / XECUTE sink: the
@@ -144,35 +148,36 @@ var ruleReadOfUndefined = Rule{
 // the sink. Tagged `modern` (in `default`): unlike M-MOD-024, it only fires at
 // the rare indirection/XECUTE sink, so its signal-to-noise warrants being on by
 // default — and as the suite's headline security check it must be discoverable.
-var ruleTaintToSink = Rule{
-	ID:       "M-MOD-036",
-	Severity: Error,
-	Category: "security",
-	Title:    "Untrusted data flows into an indirection sink",
-	Tags:     []string{"modern"},
-	Inspect: func(root parse.Node, src []byte) []Finding {
-		formalsByRow := flow.FormalParams(root, src)
-		config := flow.DefaultTaintConfig()
-		var out []Finding
-		for _, cfg := range flow.BuildCFGs(root, src) {
-			reported := map[string]bool{}
-			for _, fl := range flow.TaintFlows(cfg, src, formalsByRow[cfg.LabelRow], config) {
-				if reported[fl.Name] {
-					continue
+func ruleTaintToSink(taintCfg flow.TaintConfig) Rule {
+	return Rule{
+		ID:       "M-MOD-036",
+		Severity: Error,
+		Category: "security",
+		Title:    "Untrusted data flows into an indirection sink",
+		Tags:     []string{"modern"},
+		Inspect: func(root parse.Node, src []byte) []Finding {
+			formalsByRow := flow.FormalParams(root, src)
+			var out []Finding
+			for _, cfg := range flow.BuildCFGs(root, src) {
+				reported := map[string]bool{}
+				for _, fl := range flow.TaintFlows(cfg, src, formalsByRow[cfg.LabelRow], taintCfg) {
+					if reported[fl.Name] {
+						continue
+					}
+					reported[fl.Name] = true
+					out = append(out, Finding{
+						Message: fmt.Sprintf("tainted local %q flows into %s in %s — possible "+
+							"code/SQL/path injection", fl.Name, fl.SinkKind, fl.Label),
+						Line:    fl.Line,
+						Col:     fl.Col,
+						EndLine: fl.EndLine,
+						EndCol:  fl.EndCol,
+					})
 				}
-				reported[fl.Name] = true
-				out = append(out, Finding{
-					Message: fmt.Sprintf("tainted local %q flows into %s in %s — possible "+
-						"code/SQL/path injection", fl.Name, fl.SinkKind, fl.Label),
-					Line:    fl.Line,
-					Col:     fl.Col,
-					EndLine: fl.EndLine,
-					EndCol:  fl.EndCol,
-				})
 			}
-		}
-		return out
-	},
+			return out
+		},
+	}
 }
 
 // M-MOD-027 — `SET $ETRAP=...` not preceded by `NEW $ETRAP` on every path from

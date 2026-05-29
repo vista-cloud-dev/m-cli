@@ -75,12 +75,30 @@ func TestReadOfUndefinedDefinedClean(t *testing.T) {
 	}
 }
 
-// VistA Kernel auto-defined locals (U, DUZ, IO, ...) are suppressed even though
-// the static analysis cannot see Kernel's init.
-func TestReadOfUndefinedKernelAllowlisted(t *testing.T) {
+// Faithful to the Python tool, the VistA Kernel allowlist is OFF by default:
+// with no config (DefaultOptions ⇒ nil KernelLocals) an undefined read of a
+// Kernel local like U is flagged strictly, just like any other.
+func TestReadOfUndefinedStrictByDefault(t *testing.T) {
 	l := newLinter(t, lint.Profile("modern"))
-	// Both U and DATA are genuine reads; U is Kernel-allowlisted and skipped,
-	// DATA is a real undefined read and must still fire.
+	// Both U and DATA are genuine reads; with no [lint.vista] kernel_locals
+	// opt-in, BOTH fire (one finding per variable).
+	src := []byte("EN ;\n write U,DATA\n quit\n")
+	findings, err := l.Lint(context.Background(), src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(findings) != 2 {
+		t.Fatalf("got %d findings %+v, want 2 (U and DATA, strict default)", len(findings), findings)
+	}
+}
+
+// With the built-in allowlist opted in ([lint.vista] kernel_locals = "default"
+// ⇒ DefaultKernelLocals), the Kernel local U is suppressed and only the genuine
+// undefined read (DATA) fires.
+func TestReadOfUndefinedKernelAllowlisted(t *testing.T) {
+	opts := lint.DefaultOptions()
+	opts.KernelLocals = lint.DefaultKernelLocals()
+	l := newLinter(t, lint.ProfileWith("modern", opts))
 	src := []byte("EN ;\n write U,DATA\n quit\n")
 	findings, err := l.Lint(context.Background(), src)
 	if err != nil {

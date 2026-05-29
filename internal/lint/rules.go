@@ -9,56 +9,55 @@ import (
 	"github.com/vista-cloud-dev/m-parse/parse"
 )
 
-// Default thresholds for the metric rules (mirrors the Python m-cli defaults).
-// Config plumbing ([lint.thresholds] / --threshold) is a follow-up.
-const (
-	thLineLength    = 200
-	thDotBlockDepth = 5
-	thArgumentCount = 7
-	thCommandsLine  = 3
-)
-
 // Profiles is the set of recognized profile names (for the CLI enum). sac /
 // vista / xindex are reserved for when those rule families land (they'd select
 // rules tagged accordingly); today they'd be empty, so they're not exposed yet.
 var Profiles = []string{"default", "modern", "pythonic", "pedantic", "all"}
 
-// All returns every registered rule.
-func All() []Rule {
+// All returns every registered rule with the built-in default configuration.
+func All() []Rule { return AllWith(DefaultOptions()) }
+
+// AllWith returns every registered rule, baking the resolved config into the
+// rules that need it (thresholds, Kernel allowlist, taint config). The config-
+// neutral rules are returned as-is.
+func AllWith(opts Options) []Rule {
 	return []Rule{
-		ruleByRefSubscript,     // M-MOD-037
-		ruleLineLength,         // M-MOD-001
-		ruleDotBlockNesting,    // M-MOD-007
-		ruleArgumentCount,      // M-MOD-008
-		ruleCommandsPerLine,    // M-MOD-009
-		ruleStaleTest,          // M-MOD-017 (flow)
-		ruleReadOfUndefined,    // M-MOD-024 (flow)
-		ruleLockLeak,           // M-MOD-025 (flow)
-		ruleTransactionLeak,    // M-MOD-026 (flow)
-		ruleEtrapLeak,          // M-MOD-027 (flow)
-		ruleTaintToSink,        // M-MOD-036 (flow, security)
-		ruleAbbreviatedCommand, // M-STY-001
+		ruleByRefSubscript,                     // M-MOD-037
+		ruleLineLength(opts.Thresholds),        // M-MOD-001
+		ruleDotBlockNesting(opts.Thresholds),   // M-MOD-007
+		ruleArgumentCount(opts.Thresholds),     // M-MOD-008
+		ruleCommandsPerLine(opts.Thresholds),   // M-MOD-009
+		ruleStaleTest,                          // M-MOD-017 (flow)
+		ruleReadOfUndefined(opts.KernelLocals), // M-MOD-024 (flow)
+		ruleLockLeak,                           // M-MOD-025 (flow)
+		ruleTransactionLeak,                    // M-MOD-026 (flow)
+		ruleEtrapLeak,                          // M-MOD-027 (flow)
+		ruleTaintToSink(opts.Taint),            // M-MOD-036 (flow, security)
+		ruleAbbreviatedCommand,                 // M-STY-001
 	}
 }
 
-// Profile resolves a profile name to its rules, by tag (spec §3.1):
+// Profile resolves a profile name to its rules with the default config.
+func Profile(name string) []Rule { return ProfileWith(name, DefaultOptions()) }
+
+// ProfileWith resolves a profile name to its rules, by tag (spec §3.1):
 //
 //	default  = modern minus pedantic (the curated, low-noise set)
 //	modern   = everything tagged "modern"
 //	pythonic = modern (alias for now)
 //	pedantic = everything tagged "pedantic"
 //	all      = every rule
-func Profile(name string) []Rule {
+func ProfileWith(name string, opts Options) []Rule {
 	switch name {
 	case "all":
-		return All()
+		return AllWith(opts)
 	case "modern", "pythonic":
-		return byTag("modern")
+		return byTag("modern", opts)
 	case "pedantic":
-		return byTag("pedantic")
+		return byTag("pedantic", opts)
 	default: // "default"
 		var out []Rule
-		for _, r := range byTag("modern") {
+		for _, r := range byTag("modern", opts) {
 			if !r.hasTag("pedantic") {
 				out = append(out, r)
 			}
@@ -67,9 +66,9 @@ func Profile(name string) []Rule {
 	}
 }
 
-func byTag(tag string) []Rule {
+func byTag(tag string, opts Options) []Rule {
 	var out []Rule
-	for _, r := range All() {
+	for _, r := range AllWith(opts) {
 		if r.hasTag(tag) {
 			out = append(out, r)
 		}
@@ -95,115 +94,123 @@ var ruleByRefSubscript = Rule{
 }
 
 // M-MOD-001 — line longer than the configured column limit.
-var ruleLineLength = Rule{
-	ID:       "M-MOD-001",
-	Severity: Style,
-	Category: "style",
-	Title:    "Line longer than configured limit",
-	Tags:     []string{"modern"},
-	Inspect: func(_ parse.Node, src []byte) []Finding {
-		var out []Finding
-		for i, line := range strings.Split(string(src), "\n") {
-			n := utf8.RuneCountInString(line)
-			if n > thLineLength {
-				out = append(out, Finding{
-					Message: fmt.Sprintf("line is %d columns (limit: %d)", n, thLineLength),
-					Line:    i + 1, Col: thLineLength + 1, EndLine: i + 1, EndCol: n + 1,
-				})
+func ruleLineLength(th Thresholds) Rule {
+	return Rule{
+		ID:       "M-MOD-001",
+		Severity: Style,
+		Category: "style",
+		Title:    "Line longer than configured limit",
+		Tags:     []string{"modern"},
+		Inspect: func(_ parse.Node, src []byte) []Finding {
+			var out []Finding
+			for i, line := range strings.Split(string(src), "\n") {
+				n := utf8.RuneCountInString(line)
+				if n > th.LineLength {
+					out = append(out, Finding{
+						Message: fmt.Sprintf("line is %d columns (limit: %d)", n, th.LineLength),
+						Line:    i + 1, Col: th.LineLength + 1, EndLine: i + 1, EndCol: n + 1,
+					})
+				}
 			}
-		}
-		return out
-	},
+			return out
+		},
+	}
 }
 
 // M-MOD-007 — dot-block nesting depth exceeds the configured limit.
-var ruleDotBlockNesting = Rule{
-	ID:       "M-MOD-007",
-	Severity: Warning,
-	Category: "complexity",
-	Title:    "Dot-block nesting depth exceeds configured limit",
-	Tags:     []string{"modern"},
-	Inspect: func(root parse.Node, _ []byte) []Finding {
-		var out []Finding
-		walkNodes(root, func(n parse.Node) {
-			if n.Type() != "dot_block_prefix" {
-				return
-			}
-			depth := bytes.Count(n.Text(), []byte("."))
-			if depth > thDotBlockDepth {
-				s, e := n.StartPoint(), n.EndPoint()
-				out = append(out, Finding{
-					Message: fmt.Sprintf("dot-block nesting depth %d (limit: %d)", depth, thDotBlockDepth),
-					Line:    int(s.Row) + 1, Col: int(s.Column) + 1, EndLine: int(e.Row) + 1, EndCol: int(e.Column) + 1,
-				})
-			}
-		})
-		return out
-	},
+func ruleDotBlockNesting(th Thresholds) Rule {
+	return Rule{
+		ID:       "M-MOD-007",
+		Severity: Warning,
+		Category: "complexity",
+		Title:    "Dot-block nesting depth exceeds configured limit",
+		Tags:     []string{"modern"},
+		Inspect: func(root parse.Node, _ []byte) []Finding {
+			var out []Finding
+			walkNodes(root, func(n parse.Node) {
+				if n.Type() != "dot_block_prefix" {
+					return
+				}
+				depth := bytes.Count(n.Text(), []byte("."))
+				if depth > th.DotBlockDepth {
+					s, e := n.StartPoint(), n.EndPoint()
+					out = append(out, Finding{
+						Message: fmt.Sprintf("dot-block nesting depth %d (limit: %d)", depth, th.DotBlockDepth),
+						Line:    int(s.Row) + 1, Col: int(s.Column) + 1, EndLine: int(e.Row) + 1, EndCol: int(e.Column) + 1,
+					})
+				}
+			})
+			return out
+		},
+	}
 }
 
 // M-MOD-008 — a label has more formal arguments than the configured limit.
-var ruleArgumentCount = Rule{
-	ID:       "M-MOD-008",
-	Severity: Warning,
-	Category: "complexity",
-	Title:    "Argument count exceeds configured limit",
-	Tags:     []string{"modern"},
-	Inspect: func(root parse.Node, _ []byte) []Finding {
-		var out []Finding
-		walkNodes(root, func(n parse.Node) {
-			if n.Type() != "formals" {
-				return
-			}
-			args := 0
-			for i := uint32(0); i < n.ChildCount(); i++ {
-				if n.Child(i).Type() == "identifier" {
-					args++
+func ruleArgumentCount(th Thresholds) Rule {
+	return Rule{
+		ID:       "M-MOD-008",
+		Severity: Warning,
+		Category: "complexity",
+		Title:    "Argument count exceeds configured limit",
+		Tags:     []string{"modern"},
+		Inspect: func(root parse.Node, _ []byte) []Finding {
+			var out []Finding
+			walkNodes(root, func(n parse.Node) {
+				if n.Type() != "formals" {
+					return
 				}
-			}
-			if args <= thArgumentCount {
-				return
-			}
-			s := n.StartPoint()
-			out = append(out, Finding{
-				Message: fmt.Sprintf("label has %d formal arguments (limit: %d)", args, thArgumentCount),
-				Line:    int(s.Row) + 1, Col: int(s.Column) + 1, EndLine: int(s.Row) + 1, EndCol: int(s.Column) + 1,
+				args := 0
+				for i := uint32(0); i < n.ChildCount(); i++ {
+					if n.Child(i).Type() == "identifier" {
+						args++
+					}
+				}
+				if args <= th.ArgumentCount {
+					return
+				}
+				s := n.StartPoint()
+				out = append(out, Finding{
+					Message: fmt.Sprintf("label has %d formal arguments (limit: %d)", args, th.ArgumentCount),
+					Line:    int(s.Row) + 1, Col: int(s.Column) + 1, EndLine: int(s.Row) + 1, EndCol: int(s.Column) + 1,
+				})
 			})
-		})
-		return out
-	},
+			return out
+		},
+	}
 }
 
 // M-MOD-009 — more than the configured number of commands on one line.
-var ruleCommandsPerLine = Rule{
-	ID:       "M-MOD-009",
-	Severity: Style,
-	Category: "style",
-	Title:    "Too many commands on a single line",
-	Tags:     []string{"modern", "pedantic"},
-	Inspect: func(root parse.Node, _ []byte) []Finding {
-		var out []Finding
-		walkNodes(root, func(n parse.Node) {
-			if n.Type() != "command_sequence" {
-				return
-			}
-			cmds := 0
-			for i := uint32(0); i < n.ChildCount(); i++ {
-				if n.Child(i).Type() == "command" {
-					cmds++
+func ruleCommandsPerLine(th Thresholds) Rule {
+	return Rule{
+		ID:       "M-MOD-009",
+		Severity: Style,
+		Category: "style",
+		Title:    "Too many commands on a single line",
+		Tags:     []string{"modern", "pedantic"},
+		Inspect: func(root parse.Node, _ []byte) []Finding {
+			var out []Finding
+			walkNodes(root, func(n parse.Node) {
+				if n.Type() != "command_sequence" {
+					return
 				}
-			}
-			if cmds <= thCommandsLine {
-				return
-			}
-			s := n.StartPoint()
-			out = append(out, Finding{
-				Message: fmt.Sprintf("%d commands on one line (limit: %d)", cmds, thCommandsLine),
-				Line:    int(s.Row) + 1, Col: int(s.Column) + 1, EndLine: int(s.Row) + 1, EndCol: int(s.Column) + 1,
+				cmds := 0
+				for i := uint32(0); i < n.ChildCount(); i++ {
+					if n.Child(i).Type() == "command" {
+						cmds++
+					}
+				}
+				if cmds <= th.CommandsLine {
+					return
+				}
+				s := n.StartPoint()
+				out = append(out, Finding{
+					Message: fmt.Sprintf("%d commands on one line (limit: %d)", cmds, th.CommandsLine),
+					Line:    int(s.Row) + 1, Col: int(s.Column) + 1, EndLine: int(s.Row) + 1, EndCol: int(s.Column) + 1,
+				})
 			})
-		})
-		return out
-	},
+			return out
+		},
+	}
 }
 
 // M-STY-001 — abbreviated single-letter command keyword (provisional Go-side id;

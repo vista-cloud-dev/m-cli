@@ -3,6 +3,7 @@ module github.com/vista-cloud-dev/m-cli
 go 1.26.3
 
 require (
+	github.com/BurntSushi/toml v1.6.0
 	github.com/alecthomas/kong v1.15.0
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/vista-cloud-dev/m-parse v0.0.0-20260528192609-d8a6166546d4
