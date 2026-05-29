@@ -31,6 +31,7 @@ type Options struct {
 	Thresholds        Thresholds
 	Taint             flow.TaintConfig
 	KernelLocals      map[string]bool     // M-MOD-024 allowlist; nil ⇒ strict (no allowlist)
+	TrustedRoutines   map[string]bool     // M-XINDX-007 allowlist; nil ⇒ strict (any unknown routine flagged)
 	SeverityOverrides map[string]Severity // [lint.severity]; re-stamps Rule.Severity at build
 	Disable           map[string]bool     // [lint] disable; rule ids dropped after selection
 }
@@ -95,6 +96,19 @@ func OptionsFromConfig(cfg config.Config) Options {
 			m[n] = true
 		}
 		opts.KernelLocals = m
+	}
+
+	// [lint.vista] trusted_routines: {"default"} ⇒ the built-in allowlist; an
+	// explicit list ⇒ exactly those (upper-cased, leading ^ stripped); absent/
+	// empty ⇒ nil (strict — M-XINDX-007 flags any routine not in the workspace).
+	if len(cfg.LintVistaTrustedRoutines) == 1 && cfg.LintVistaTrustedRoutines[0] == "default" {
+		opts.TrustedRoutines = DefaultTrustedRoutines()
+	} else if len(cfg.LintVistaTrustedRoutines) > 0 {
+		m := make(map[string]bool, len(cfg.LintVistaTrustedRoutines))
+		for _, n := range cfg.LintVistaTrustedRoutines {
+			m[strings.ToUpper(strings.TrimPrefix(n, "^"))] = true
+		}
+		opts.TrustedRoutines = m
 	}
 
 	if len(cfg.LintSeverityOverrides) > 0 {

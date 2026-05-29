@@ -35,6 +35,7 @@ import (
 	"github.com/vista-cloud-dev/m-cli/internal/mfmt"
 	"github.com/vista-cloud-dev/m-cli/internal/mtest"
 	"github.com/vista-cloud-dev/m-cli/internal/watch"
+	"github.com/vista-cloud-dev/m-cli/internal/workspace"
 	"github.com/vista-cloud-dev/m-parse/parse"
 )
 
@@ -328,6 +329,33 @@ func (c *lintCmd) Run(cc *clikit.Context) error {
 	files, err := discover(paths)
 	if err != nil {
 		return clikit.Fail(clikit.ExitRuntime, "DISCOVER_FAILED", err.Error(), "")
+	}
+
+	// Build the cross-routine workspace index when a selected rule needs it
+	// (M-XINDX-007/008/049). A pre-pass over all discovered files indexes every
+	// routine's labels + references so the rules can resolve LABEL^ROUTINE.
+	needsWS := false
+	for _, r := range rules {
+		if r.NeedsWorkspace() {
+			needsWS = true
+			break
+		}
+	}
+	if needsWS {
+		ws := workspace.New()
+		for _, f := range files {
+			src, rerr := os.ReadFile(f)
+			if rerr != nil {
+				continue
+			}
+			tree, perr := p.Parse(ctx, src)
+			if perr != nil {
+				continue
+			}
+			ws.AddFile(strings.TrimSuffix(filepath.Base(f), filepath.Ext(f)), tree.RootNode())
+			tree.Close()
+		}
+		linter.AttachWorkspace(ws)
 	}
 
 	var diags []clikit.Diagnostic

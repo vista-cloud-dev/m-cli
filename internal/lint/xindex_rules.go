@@ -17,56 +17,58 @@ import (
 // Python source notes several node-name typos that silently no-op'd — those are
 // corrected here).
 //
-// Three XINDEX rules are deliberately NOT ported: M-XINDX-007 (call to
-// undefined routine), M-XINDX-008 (undefined label in another routine), and
-// M-XINDX-049 (label never referenced) — all need a cross-routine workspace
-// index, which the Go single-file linter has no equivalent for. The Python tool
-// itself gates these behind needs_context / a workspace, so deferring them is
-// faithful, not a gap in parity.
+// The cross-routine rules M-XINDX-007 (call to undefined routine), 008
+// (undefined label in another routine) and 049 (label never referenced) live in
+// xindex_cross.go: they consume the workspace index (internal/workspace) and run
+// only when one is attached, mirroring the Python tool's needs_context gating.
 
-// xindexAll returns the ported XINDEX rules. Rule 017 and 014 are name-aware
-// (they compare against the routine identity); the rest are plain walk rules.
-func xindexAll() []Rule {
+// xindexAll returns the ported XINDEX rules. Rule 017/014 are name-aware;
+// 007/008/049 are cross-routine (need a workspace index — skipped without one);
+// the rest are plain walk rules. trusted is the M-XINDX-007 allowlist.
+func xindexAll(trusted map[string]bool) []Rule {
 	return []Rule{
-		ruleZCommand,           // M-XINDX-002
-		ruleDeadCodeAfterQuit,  // M-XINDX-009
-		ruleTrailingBlanks,     // M-XINDX-013
-		ruleMissingLabelCall,   // M-XINDX-014
-		ruleDuplicateLabel,     // M-XINDX-015
-		ruleFirstLabelName,     // M-XINDX-017
-		ruleControlChar,        // M-XINDX-018
-		ruleLineLength245,      // M-XINDX-019
-		ruleViewCommand,        // M-XINDX-020
-		ruleSyntaxError,        // M-XINDX-021
-		ruleExclusiveKill,      // M-XINDX-022
-		ruleUnargumentedKill,   // M-XINDX-023
-		ruleKillUnsubGlobal,    // M-XINDX-024
-		ruleBreakCommand,       // M-XINDX-025
-		ruleNewExclUnarg,       // M-XINDX-026
-		ruleDollarView,         // M-XINDX-027
-		ruleNonStandardZSV,     // M-XINDX-028
-		ruleCloseCommand,       // M-XINDX-029
-		ruleLabelOffset,        // M-XINDX-030
-		ruleNonStandardZFunc,   // M-XINDX-031
-		ruleHaltCommand,        // M-XINDX-032
-		ruleReadNoTimeout,      // M-XINDX-033
-		ruleOpenCommand,        // M-XINDX-034
-		ruleRoutineSize,        // M-XINDX-035
-		ruleJobCommand,         // M-XINDX-036
-		ruleStarPoundRead,      // M-XINDX-041
-		ruleNullLine,           // M-XINDX-042
-		ruleSecondLineSAC,      // M-XINDX-044
-		ruleSetPercentGlobal,   // M-XINDX-045
-		ruleLowercaseCommand,   // M-XINDX-047
-		ruleExtendedReference,  // M-XINDX-050
-		ruleEmptyConditional,   // M-XINDX-051
-		ruleSystemAccess,       // M-XINDX-054
-		rulePatchMissing,       // M-XINDX-056
-		ruleLocalVarCase,       // M-XINDX-057
-		ruleRoutineCodeSize,    // M-XINDX-058
-		ruleLockNoTimeout,      // M-XINDX-060
-		ruleNonIncrementalLock, // M-XINDX-061
-		ruleFirstLineSAC,       // M-XINDX-062
+		ruleUndefinedRoutine(trusted), // M-XINDX-007 (cross-routine)
+		ruleUndefinedLabel,            // M-XINDX-008 (cross-routine)
+		ruleLabelNeverReferenced,      // M-XINDX-049 (cross-routine)
+		ruleZCommand,                  // M-XINDX-002
+		ruleDeadCodeAfterQuit,         // M-XINDX-009
+		ruleTrailingBlanks,            // M-XINDX-013
+		ruleMissingLabelCall,          // M-XINDX-014
+		ruleDuplicateLabel,            // M-XINDX-015
+		ruleFirstLabelName,            // M-XINDX-017
+		ruleControlChar,               // M-XINDX-018
+		ruleLineLength245,             // M-XINDX-019
+		ruleViewCommand,               // M-XINDX-020
+		ruleSyntaxError,               // M-XINDX-021
+		ruleExclusiveKill,             // M-XINDX-022
+		ruleUnargumentedKill,          // M-XINDX-023
+		ruleKillUnsubGlobal,           // M-XINDX-024
+		ruleBreakCommand,              // M-XINDX-025
+		ruleNewExclUnarg,              // M-XINDX-026
+		ruleDollarView,                // M-XINDX-027
+		ruleNonStandardZSV,            // M-XINDX-028
+		ruleCloseCommand,              // M-XINDX-029
+		ruleLabelOffset,               // M-XINDX-030
+		ruleNonStandardZFunc,          // M-XINDX-031
+		ruleHaltCommand,               // M-XINDX-032
+		ruleReadNoTimeout,             // M-XINDX-033
+		ruleOpenCommand,               // M-XINDX-034
+		ruleRoutineSize,               // M-XINDX-035
+		ruleJobCommand,                // M-XINDX-036
+		ruleStarPoundRead,             // M-XINDX-041
+		ruleNullLine,                  // M-XINDX-042
+		ruleSecondLineSAC,             // M-XINDX-044
+		ruleSetPercentGlobal,          // M-XINDX-045
+		ruleLowercaseCommand,          // M-XINDX-047
+		ruleExtendedReference,         // M-XINDX-050
+		ruleEmptyConditional,          // M-XINDX-051
+		ruleSystemAccess,              // M-XINDX-054
+		rulePatchMissing,              // M-XINDX-056
+		ruleLocalVarCase,              // M-XINDX-057
+		ruleRoutineCodeSize,           // M-XINDX-058
+		ruleLockNoTimeout,             // M-XINDX-060
+		ruleNonIncrementalLock,        // M-XINDX-061
+		ruleFirstLineSAC,              // M-XINDX-062
 	}
 }
 

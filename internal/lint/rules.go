@@ -39,9 +39,10 @@ func AllWith(opts Options) []Rule {
 		ruleTaintToSink(opts.Taint),            // M-MOD-036 (flow, security)
 		ruleAbbreviatedCommand,                 // M-STY-001
 	}
-	// XINDEX family (tag xindex / sac / vista) — config-neutral; appended so the
-	// xindex/sac/vista profiles and `all` select them.
-	return append(rules, xindexAll()...)
+	// XINDEX family (tag xindex / sac / vista) — appended so the xindex/sac/vista
+	// profiles and `all` select them. The cross-routine rules consume the
+	// workspace index at lint time; M-XINDX-007's trusted allowlist is baked in.
+	return append(rules, xindexAll(opts.TrustedRoutines)...)
 }
 
 // Profile resolves a profile name to its rules with the default config.

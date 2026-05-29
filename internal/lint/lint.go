@@ -18,6 +18,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/vista-cloud-dev/m-cli/internal/workspace"
 	"github.com/vista-cloud-dev/m-parse/parse"
 )
 
@@ -72,7 +73,17 @@ type Rule struct {
 	// rules that compare against the routine identity (e.g. M-XINDX-017). When
 	// the name is "" (plain Lint, or a non-file source) the rule should no-op.
 	InspectNamed func(root parse.Node, src []byte, routine string) []Finding
+
+	// Cross-routine walk rule: also receives the routine name and the workspace
+	// index (labels + references across all linted files). Used by M-XINDX-007/
+	// 008/049. Runs only when a workspace is attached (Linter.AttachWorkspace);
+	// with no workspace these rules are skipped (faithful to the Python runner).
+	InspectWorkspace func(root parse.Node, src []byte, routine string, ws *workspace.Index) []Finding
 }
+
+// NeedsWorkspace reports whether the rule requires a cross-routine workspace
+// index (so callers can skip building one when no selected rule uses it).
+func (r Rule) NeedsWorkspace() bool { return r.InspectWorkspace != nil }
 
 func (r Rule) hasTag(tag string) bool {
 	for _, t := range r.Tags {
@@ -89,7 +100,12 @@ type Linter struct {
 	p        *parse.Parser
 	rules    []Rule
 	compiled map[string]*parse.Query
+	ws       *workspace.Index // optional; enables cross-routine rules
 }
+
+// AttachWorkspace gives the linter a cross-routine index so InspectWorkspace
+// rules (M-XINDX-007/008/049) can run. Without it those rules are skipped.
+func (l *Linter) AttachWorkspace(ws *workspace.Index) { l.ws = ws }
 
 // NewLinter compiles every query rule's query against the grammar.
 func NewLinter(p *parse.Parser, rules []Rule) (*Linter, error) {
@@ -157,9 +173,15 @@ func (l *Linter) LintNamed(ctx context.Context, src []byte, routine string) ([]F
 			continue
 		}
 		var raw []Finding
-		if r.InspectNamed != nil {
+		switch {
+		case r.InspectWorkspace != nil:
+			if l.ws == nil {
+				continue // cross-routine rule with no workspace attached → skip
+			}
+			raw = r.InspectWorkspace(root, src, routine, l.ws)
+		case r.InspectNamed != nil:
 			raw = r.InspectNamed(root, src, routine)
-		} else {
+		default:
 			raw = r.Inspect(root, src)
 		}
 		for _, f := range raw {
