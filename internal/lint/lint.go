@@ -16,9 +16,17 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/vista-cloud-dev/m-parse/parse"
 )
+
+// internalRulePrefix marks diagnostics the linter emits about itself (a rule
+// crash, a parse failure). These are never suppressible — the user always wants
+// to know when the linter misbehaves. No such rule exists yet (parse errors
+// surface as Lint's error return), but the guard keeps the contract if one is
+// added, mirroring the Python tool's M-INTERNAL-RULE-CRASH carve-out.
+const internalRulePrefix = "M-INTERNAL-"
 
 // Severity ranks a finding.
 type Severity string
@@ -149,5 +157,20 @@ func (l *Linter) Lint(ctx context.Context, src []byte) ([]Finding, error) {
 		}
 		return findings[a].Rule < findings[b].Rule
 	})
+
+	// Drop findings silenced by inline `; m-lint: disable=...` directives. This
+	// is the single choke point, so every rule is suppressible uniformly —
+	// except internal (linter-about-itself) diagnostics, which are never hidden.
+	if len(findings) > 0 {
+		if sup := parseDirectives(src); !sup.empty() {
+			kept := findings[:0]
+			for _, f := range findings {
+				if strings.HasPrefix(f.Rule, internalRulePrefix) || !sup.isSuppressed(f.Line, f.Rule) {
+					kept = append(kept, f)
+				}
+			}
+			findings = kept
+		}
+	}
 	return findings, nil
 }
