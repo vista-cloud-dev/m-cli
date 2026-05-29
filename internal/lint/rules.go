@@ -31,6 +31,7 @@ func All() []Rule {
 		ruleDotBlockNesting,    // M-MOD-007
 		ruleArgumentCount,      // M-MOD-008
 		ruleCommandsPerLine,    // M-MOD-009
+		ruleLockLeak,           // M-MOD-025 (flow)
 		ruleAbbreviatedCommand, // M-STY-001
 	}
 }
