@@ -253,6 +253,35 @@ func TestXindexPrecisionFixes(t *testing.T) {
 	if n := countRuleID(lintX(t, "FOO ;\n S X=1 \n Q\n", "FOO"), "M-XINDX-013"); n != 1 {
 		t.Errorf("013 should still flag trailing space on a code line, got %d", n)
 	}
+	// 013: an argumentless command with a trailing space is NOT flagged — verified
+	// against live ^XINDEX (` Q ` / ` Q:1 ` / ` H ` / ` S X=1 Q ` all clean), since
+	// 013 fires only when the trailing space follows an argument.
+	for _, src := range []string{
+		"FOO ;\n Q \n",       // argumentless QUIT + trailing space
+		"FOO ;\n Q:1 \n",     // argumentless QUIT w/ postcondition + trailing space
+		"FOO ;\n S X=1 Q \n", // line ends in an argumentless command
+	} {
+		if n := countRuleID(lintX(t, src, "FOO"), "M-XINDX-013"); n != 0 {
+			t.Errorf("013 should not flag a trailing space after an argumentless command in %q, got %d", src, n)
+		}
+	}
+
+	// 042: a label line with no inline body is a null line (verified against live
+	// ^XINDEX); a label carrying a comment or code is not.
+	if n := countRuleID(lintX(t, "FOO ;\nTAG\n Q\n", "FOO"), "M-XINDX-042"); n != 1 {
+		t.Errorf("042 should flag a bare label line, got %d", n)
+	}
+	if n := countRuleID(lintX(t, "FOO ;\nTAG(A,B)\n Q\n", "FOO"), "M-XINDX-042"); n != 1 {
+		t.Errorf("042 should flag a label-with-formals line that has no body, got %d", n)
+	}
+	for _, src := range []string{
+		"FOO ;\nTAG ;comment\n Q\n", // label + comment
+		"FOO ;\nTAG S X=1\n Q\n",    // label + code
+	} {
+		if n := countRuleID(lintX(t, src, "FOO"), "M-XINDX-042"); n != 0 {
+			t.Errorf("042 should not flag a label line with a body in %q, got %d", src, n)
+		}
+	}
 
 	// 050: a `|` inside a subscript string is not an extended reference.
 	if n := countRuleID(lintX(t, "FOO ;\n S ^TMP(\"X\",Y_\" | Z |\")=1\n Q\n", "FOO"), "M-XINDX-050"); n != 0 {

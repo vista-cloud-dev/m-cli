@@ -265,32 +265,85 @@ func hasLowercaseLetter(s string) bool {
 
 // --- text / line rules -------------------------------------------------------
 
-// M-XINDX-013 — Blank(s) at end of line. Faithful to XINDEX, which raises this
-// only inside its command-parse loop (XINDEX.m: `D SEP I '$L(LIN),CH=" " D
-// E^XINDX1(13)`): so it fires only on CODE lines with no comment. A comment
-// (`;...`) consumes the rest of the line including trailing space, and a
-// whitespace-only line is a null line (M-XINDX-042), not a trailing-blank —
-// neither is flagged.
+// M-XINDX-013 — Blank(s) at end of line. Faithful to XINDEX's two command-loop
+// triggers (XINDEX.m), verified against live ^XINDEX over the corpus bytes:
+//
+//   - SEP path (`D SEP I '$L(LIN),CH=" " D E^XINDX1(13)`): a trailing space
+//     after a command ARGUMENT — ` S X=1 `, ` W "x" `, ` D EN^FOO ` fire.
+//   - command-position path (`I COM=" " S ERR=$S(LIN?1." ":13,1:0)`): an
+//     ARGUMENTLESS command leaves one space as its terminator, so a single
+//     trailing space (` Q `, ` D `, ` H `, ` Q:1 `) is NOT flagged, but two or
+//     more (` Q  `, ` DO  `) leave a leftover space in command position → 013.
+//
+// So per command on the line: if it has an argument, ≥1 trailing space to EOL
+// fires; if it is argumentless, ≥2 trailing spaces fire. A comment consumes the
+// rest of its line (no command ends at the blanks) and a whitespace-only line is
+// neither 013 nor 042 (XINDEX consumes it as dot/space and quits) — both clean.
 var ruleTrailingBlanks = Rule{
 	ID: "M-XINDX-013", Severity: Style, Category: "style",
 	Title: "Blank(s) at end of line", Tags: []string{"xindex"},
-	Inspect: func(_ parse.Node, src []byte) []Finding {
+	Inspect: func(root parse.Node, src []byte) []Finding {
 		var out []Finding
-		for i, raw := range splitLines(src) {
-			if !bytes.HasSuffix(raw, []byte(" ")) && !bytes.HasSuffix(raw, []byte("\t")) {
-				continue
+		var walk func(n parse.Node)
+		walk = func(n parse.Node) {
+			if n.Type() == "command" {
+				hasArg := false
+				for i := uint32(0); i < n.ChildCount(); i++ {
+					if n.Child(i).Type() == "argument_list" {
+						hasArg = true
+						break
+					}
+				}
+				e := int(n.EndByte())
+				run := trailingSpaceRun(src, e) // spaces from e to EOL; 0 if not trailing
+				if (hasArg && run >= 1) || (!hasArg && run >= 2) {
+					line, col := lineColAt(src, e)
+					out = append(out, Finding{
+						Message: "Blank(s) at end of line",
+						Line:    line, Col: col, EndLine: line, EndCol: col + run,
+					})
+				}
 			}
-			if bytes.IndexByte(raw, ';') >= 0 || len(bytes.TrimSpace(raw)) == 0 {
-				continue // comment line (trailing ws is in the comment) or null line
+			for i := uint32(0); i < n.ChildCount(); i++ {
+				walk(n.Child(i))
 			}
-			stripped := bytes.TrimRight(raw, " \t")
-			out = append(out, Finding{
-				Message: "Blank(s) at end of line",
-				Line:    i + 1, Col: len(stripped) + 1, EndLine: i + 1, EndCol: len(raw) + 1,
-			})
 		}
+		walk(root)
 		return out
 	},
+}
+
+// trailingSpaceRun returns the count of consecutive spaces from off up to the
+// line terminator (or end of src). It returns 0 if a non-space, non-terminator
+// byte appears first — i.e. the spaces are not at end-of-line. Faithful to
+// XINDEX, whose 013 triggers test the space character specifically (a trailing
+// tab is a control character → M-XINDX-018, not 013).
+func trailingSpaceRun(src []byte, off int) int {
+	i := off
+	for i < len(src) {
+		switch src[i] {
+		case ' ':
+			i++
+		case '\n', '\r':
+			return i - off
+		default:
+			return 0
+		}
+	}
+	return i - off // trailing spaces at end-of-file with no final newline
+}
+
+// lineColAt returns the 1-based line and column of byte offset off in src.
+func lineColAt(src []byte, off int) (line, col int) {
+	line = 1
+	lineStart := 0
+	for i := 0; i < off && i < len(src); i++ {
+		if src[i] == '\n' {
+			line++
+			lineStart = i + 1
+		}
+	}
+	return line, off - lineStart + 1
 }
 
 // M-XINDX-018 — Line contains a CONTROL (non-graphic) character.
@@ -334,15 +387,29 @@ var ruleLineLength245 = Rule{
 	},
 }
 
-// M-XINDX-042 — Null line (no commands or comment). A trailing blank line is OK.
+// M-XINDX-042 — Null line (no commands or comment). XINDEX flags a line as null
+// when, after stripping the leading space-piece, nothing remains
+// (`S LIN=$P(LIN," ",2,999) I LIN="" D E^XINDX1(42)`): verified against live
+// ^XINDEX, this is true for an empty line and a single-space line, but a line of
+// TWO-OR-MORE spaces is consumed as dot/space level and is clean (not 042).
+// (XINDEX additionally raises M-XINDX-018 on a truly empty line — an XINDEX
+// parser quirk treating "" as a non-graphic line; m-cli keeps 018 about real
+// control characters and does not replicate that.)
 var ruleNullLine = Rule{
 	ID: "M-XINDX-042", Severity: Style, Category: "style",
 	Title: "Null line (no commands or comment)", Tags: []string{"xindex"},
 	Inspect: func(_ parse.Node, src []byte) []Finding {
-		lines := splitLines(src)
 		var out []Finding
-		for i, raw := range lines {
-			if len(bytes.TrimSpace(raw)) == 0 && i+1 < len(lines) {
+		// XINDEX raises 042 iff `$P(line," ",2,999)=""` — nothing remains after the
+		// first space-piece. Verified against live ^XINDEX, that is exactly: the line
+		// has NO space, or exactly ONE space as its final character. This covers an
+		// empty line, a single-space line, and a body-less label (`TAG`, `TAG `,
+		// `TAG(A,B)`, `TAG(A,B) `). A label with TWO+ trailing spaces, a comment, or
+		// code leaves a residue after the first space and is clean. Pure text — it
+		// mirrors XINDEX's own line model, so it also matches on malformed input
+		// where the parse tree would mis-split.
+		for i, raw := range splitLines(src) {
+			if sp := bytes.IndexByte(raw, ' '); sp < 0 || sp == len(raw)-1 {
 				out = append(out, Finding{
 					Message: "Null line (no commands or comment)",
 					Line:    i + 1, Col: 1, EndLine: i + 1, EndCol: 1,
@@ -353,14 +420,34 @@ var ruleNullLine = Rule{
 	},
 }
 
-// M-XINDX-035 — Routine exceeds SACC maximum size of 20000 bytes.
+// routineSizes computes XINDEX's two size totals exactly (XINDEX.m B5 loop):
+// SZT = Σ(len(line)+2) over every line (the +2 is XINDEX's CRLF accounting), and
+// SZC = Σ(len) of comment lines — a line whose content after the first
+// space-piece (and any leading dot/space) begins with a single ";" (";;" version
+// lines are excluded). Routine code size is SZT-SZC.
+func routineSizes(src []byte) (szt, szc int) {
+	for _, line := range splitLines(src) {
+		szt += len(line) + 2
+		sp := bytes.IndexByte(line, ' ')
+		if sp < 0 {
+			continue // no space ⇒ no comment part (a bare label, etc.)
+		}
+		afterLabel := bytes.TrimLeft(line[sp+1:], " .")
+		if len(afterLabel) >= 1 && afterLabel[0] == ';' && (len(afterLabel) < 2 || afterLabel[1] != ';') {
+			szc += len(afterLabel)
+		}
+	}
+	return szt, szc
+}
+
+// M-XINDX-035 — Routine exceeds SACC maximum size of 20000 bytes (XINDEX SZT).
 var ruleRoutineSize = Rule{
 	ID: "M-XINDX-035", Severity: Style, Category: "complexity",
 	Title: "Routine exceeds SACC maximum size of 20000 bytes", Tags: []string{"xindex", "sac"},
 	Inspect: func(_ parse.Node, src []byte) []Finding {
-		if len(src) > 20000 {
+		if szt, _ := routineSizes(src); szt > 20000 {
 			return []Finding{{
-				Message: fmt.Sprintf("Routine exceeds SACC maximum size of 20000 bytes (%d bytes)", len(src)),
+				Message: fmt.Sprintf("Routine exceeds SACC maximum size of 20000 bytes (%d bytes)", szt),
 				Line:    1, Col: 1, EndLine: 1, EndCol: 1,
 			}}
 		}
@@ -368,25 +455,14 @@ var ruleRoutineSize = Rule{
 	},
 }
 
-// M-XINDX-058 — Routine code (non-comment, non-blank) exceeds SACC max of 15000.
+// M-XINDX-058 — Routine code (SZT-SZC) exceeds SACC max of 15000 bytes.
 var ruleRoutineCodeSize = Rule{
 	ID: "M-XINDX-058", Severity: Style, Category: "complexity",
 	Title: "Routine code exceeds SACC max of 15000 bytes", Tags: []string{"xindex", "sac"},
 	Inspect: func(_ parse.Node, src []byte) []Finding {
-		codeBytes := 0
-		for _, line := range splitLines(src) {
-			stripped := bytes.TrimLeft(line, " \t")
-			if len(stripped) == 0 || stripped[0] == ';' {
-				continue
-			}
-			if idx := bytes.IndexByte(stripped, ';'); idx >= 0 {
-				stripped = stripped[:idx]
-			}
-			codeBytes += len(stripped) + 1
-		}
-		if codeBytes > 15000 {
+		if szt, szc := routineSizes(src); szt-szc > 15000 {
 			return []Finding{{
-				Message: fmt.Sprintf("Routine code exceeds SACC maximum of 15000 bytes (%d bytes)", codeBytes),
+				Message: fmt.Sprintf("Routine code exceeds SACC maximum of 15000 bytes (%d bytes)", szt-szc),
 				Line:    1, Col: 1, EndLine: 1, EndCol: 1,
 			}}
 		}
