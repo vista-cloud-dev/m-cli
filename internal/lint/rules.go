@@ -36,6 +36,7 @@ func All() []Rule {
 		ruleLockLeak,           // M-MOD-025 (flow)
 		ruleTransactionLeak,    // M-MOD-026 (flow)
 		ruleEtrapLeak,          // M-MOD-027 (flow)
+		ruleTaintToSink,        // M-MOD-036 (flow, security)
 		ruleAbbreviatedCommand, // M-STY-001
 	}
 }

@@ -232,3 +232,82 @@ func TestEtrapGuardedClean(t *testing.T) {
 		t.Errorf("got %d findings %+v, want 0", len(findings), findings)
 	}
 }
+
+// M-MOD-036: a READ-tainted local reaching a D @X indirection is an error,
+// anchored at the sink, and present in the default profile (it's the suite's
+// headline security check).
+func TestTaintToIndirectionFlagged(t *testing.T) {
+	l := newLinter(t, lint.Profile("default"))
+	src := []byte("EN ;\n read X\n do @X\n quit\n")
+	findings, err := l.Lint(context.Background(), src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("got %d findings %+v, want 1 (M-MOD-036)", len(findings), findings)
+	}
+	f := findings[0]
+	if f.Rule != "M-MOD-036" || f.Severity != lint.Error {
+		t.Errorf("got %+v, want rule M-MOD-036 severity error", f)
+	}
+	if f.Line != 3 { // anchored at the sink (D @X), not the READ or the header
+		t.Errorf("anchor line = %d, want 3 (the indirection sink)", f.Line)
+	}
+}
+
+// A tainted public-label formal flowing into XECUTE is flagged.
+func TestTaintFormalToXecuteFlagged(t *testing.T) {
+	l := newLinter(t, lint.Profile("default"))
+	src := []byte("EN(CODE) ;\n xecute CODE\n quit\n")
+	findings, err := l.Lint(context.Background(), src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("got %d findings %+v, want 1 (M-MOD-036)", len(findings), findings)
+	}
+	if findings[0].Rule != "M-MOD-036" {
+		t.Errorf("got rule %q, want M-MOD-036", findings[0].Rule)
+	}
+}
+
+// A sanitized value ($L) reaching XECUTE is clean — the sanitizer output is
+// numeric and cannot carry injected code.
+func TestTaintSanitizedClean(t *testing.T) {
+	l := newLinter(t, lint.Profile("default"))
+	src := []byte("EN(CODE) ;\n set S=$L(CODE)\n xecute S\n quit\n")
+	findings, err := l.Lint(context.Background(), src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(findings) != 0 {
+		t.Errorf("got %d findings %+v, want 0 (sanitized)", len(findings), findings)
+	}
+}
+
+// An indirection on an untainted local is not a finding.
+func TestTaintCleanIndirection(t *testing.T) {
+	l := newLinter(t, lint.Profile("default"))
+	src := []byte("EN ;\n set X=\"^ROU\"\n do @X\n quit\n")
+	findings, err := l.Lint(context.Background(), src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(findings) != 0 {
+		t.Errorf("got %d findings %+v, want 0 (X never tainted)", len(findings), findings)
+	}
+}
+
+// One finding per (label, tainted var): the same tainted value fanning into
+// several sinks collapses to a single finding.
+func TestTaintDedup(t *testing.T) {
+	l := newLinter(t, lint.Profile("default"))
+	src := []byte("EN ;\n read X\n do @X\n set @X=1\n quit\n")
+	findings, err := l.Lint(context.Background(), src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("got %d findings %+v, want 1 (deduped on X)", len(findings), findings)
+	}
+}

@@ -134,6 +134,47 @@ var ruleReadOfUndefined = Rule{
 	},
 }
 
+// M-MOD-036 — untrusted data flows into an indirection / XECUTE sink: the
+// differentiating security rule. A forward MAY-analysis (taint, union meet) over
+// the same per-label CFG tracks which locals may hold attacker-controlled data
+// (sources: READ X, and public-label formals); a finding fires when such a
+// tainted local reaches an @indirection node (D @X, S @X=v, S Y=@X, S Y=A_@X) or
+// an XECUTE argument — M's code/SQL/path-injection vector. $L/$LENGTH/$A/$ASCII
+// sanitize (numeric output). One finding per (label, tainted var), anchored at
+// the sink. Tagged `modern` (in `default`): unlike M-MOD-024, it only fires at
+// the rare indirection/XECUTE sink, so its signal-to-noise warrants being on by
+// default — and as the suite's headline security check it must be discoverable.
+var ruleTaintToSink = Rule{
+	ID:       "M-MOD-036",
+	Severity: Error,
+	Category: "security",
+	Title:    "Untrusted data flows into an indirection sink",
+	Tags:     []string{"modern"},
+	Inspect: func(root parse.Node, src []byte) []Finding {
+		formalsByRow := flow.FormalParams(root, src)
+		config := flow.DefaultTaintConfig()
+		var out []Finding
+		for _, cfg := range flow.BuildCFGs(root, src) {
+			reported := map[string]bool{}
+			for _, fl := range flow.TaintFlows(cfg, src, formalsByRow[cfg.LabelRow], config) {
+				if reported[fl.Name] {
+					continue
+				}
+				reported[fl.Name] = true
+				out = append(out, Finding{
+					Message: fmt.Sprintf("tainted local %q flows into %s in %s — possible "+
+						"code/SQL/path injection", fl.Name, fl.SinkKind, fl.Label),
+					Line:    fl.Line,
+					Col:     fl.Col,
+					EndLine: fl.EndLine,
+					EndCol:  fl.EndCol,
+				})
+			}
+		}
+		return out
+	},
+}
+
 // M-MOD-027 — `SET $ETRAP=...` not preceded by `NEW $ETRAP` on every path from
 // the label entry (path-sensitive graduation of an intra-label NEW-$ETRAP
 // check). Setting the error trap without first NEW-ing it persists the new

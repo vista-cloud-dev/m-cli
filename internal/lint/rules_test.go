@@ -79,7 +79,7 @@ func TestDefaultProfileMembership(t *testing.T) {
 	for _, r := range lint.Profile("default") {
 		ids[r.ID] = true
 	}
-	for _, want := range []string{"M-MOD-001", "M-MOD-007", "M-MOD-008", "M-MOD-037"} {
+	for _, want := range []string{"M-MOD-001", "M-MOD-007", "M-MOD-008", "M-MOD-037", "M-MOD-036"} {
 		if !ids[want] {
 			t.Errorf("default profile missing %s", want)
 		}
