@@ -53,3 +53,36 @@ func TestLockLeakInModernNotPedantic(t *testing.T) {
 		t.Fatalf("pedantic: got %d findings (err %v), want 0", len(f), err)
 	}
 }
+
+// M-MOD-026: a TSTART with no matching TCOMMIT/TROLLBACK before exit is flagged.
+func TestTransactionLeakFlagged(t *testing.T) {
+	l := newLinter(t, lint.Profile("default"))
+	src := []byte("TX ;\n tstart\n quit\n")
+	findings, err := l.Lint(context.Background(), src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("got %d findings %+v, want 1 (M-MOD-026)", len(findings), findings)
+	}
+	f := findings[0]
+	if f.Rule != "M-MOD-026" || f.Severity != lint.Error {
+		t.Errorf("got %+v, want rule M-MOD-026 severity error", f)
+	}
+	if f.Line != 1 || f.Col != 1 {
+		t.Errorf("anchor = %d:%d, want 1:1 (label header)", f.Line, f.Col)
+	}
+}
+
+// A balanced transaction (TSTART…TCOMMIT before exit) produces no finding.
+func TestTransactionBalancedClean(t *testing.T) {
+	l := newLinter(t, lint.Profile("default"))
+	src := []byte("TX ;\n tstart\n tcommit\n quit\n")
+	findings, err := l.Lint(context.Background(), src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(findings) != 0 {
+		t.Errorf("got %d findings %+v, want 0", len(findings), findings)
+	}
+}

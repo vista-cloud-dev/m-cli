@@ -117,6 +117,50 @@ func TestDotBlockLockLeak(t *testing.T) {
 	}
 }
 
+func depthAtExit(t *testing.T, src string) map[string]int {
+	t.Helper()
+	root, b, done := parseRoot(t, src)
+	defer done()
+	out := map[string]int{}
+	for _, cfg := range flow.BuildCFGs(root, b) {
+		out[cfg.LabelName] = flow.DepthAtExit(cfg, b)
+	}
+	return out
+}
+
+func TestTransactionBalanced(t *testing.T) {
+	if got := depthAtExit(t, "TX ;\n tstart\n tcommit\n quit\n")["TX"]; got != 0 {
+		t.Errorf("depth at exit = %d, want 0 (TSTART then TCOMMIT)", got)
+	}
+}
+
+func TestTransactionLeak(t *testing.T) {
+	if got := depthAtExit(t, "TX ;\n tstart\n quit\n")["TX"]; got != 1 {
+		t.Errorf("depth at exit = %d, want 1 (TSTART never committed)", got)
+	}
+}
+
+func TestTransactionNestedBalanced(t *testing.T) {
+	if got := depthAtExit(t, "TX ;\n ts\n ts\n tc\n tc\n q\n")["TX"]; got != 0 {
+		t.Errorf("depth at exit = %d, want 0 (two TS, two TC)", got)
+	}
+}
+
+func TestTransactionRollbackCounts(t *testing.T) {
+	if got := depthAtExit(t, "TX ;\n tstart\n trollback\n quit\n")["TX"]; got != 0 {
+		t.Errorf("depth at exit = %d, want 0 (TROLLBACK closes)", got)
+	}
+}
+
+// MAY-analysis: a path that conditionally commits but can fall through with the
+// transaction open reports the worst-case (open) depth. `i 0 tc` only commits
+// when the IF is true; the if-skip path leaves depth 1.
+func TestTransactionLeakOnOnePath(t *testing.T) {
+	if got := depthAtExit(t, "TX ;\n tstart\n i 0 tc\n quit\n")["TX"]; got != 1 {
+		t.Errorf("depth at exit = %d, want 1 (commit only on the IF-true path)", got)
+	}
+}
+
 // Multiple labels are analyzed independently: a leak in one does not bleed into
 // the next, and a clean label reports nothing.
 func TestMultiLabelIndependent(t *testing.T) {

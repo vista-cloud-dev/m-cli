@@ -36,3 +36,32 @@ var ruleLockLeak = Rule{
 		return out
 	},
 }
+
+// M-MOD-026 — at least one path from label entry to exit leaves a transaction
+// open (path-sensitive graduation of an intra-label TSTART/TCOMMIT balance
+// check). A forward MAY-analysis over the same CFG tracks the worst-case
+// transaction nesting depth; a non-zero depth at the exit block means some path
+// forgets to TCOMMIT/TROLLBACK, so the transaction outlives the routine.
+var ruleTransactionLeak = Rule{
+	ID:       "M-MOD-026",
+	Severity: Error,
+	Category: "concurrency",
+	Title:    "TSTART leak across exit paths",
+	Tags:     []string{"modern"},
+	Inspect: func(root parse.Node, src []byte) []Finding {
+		var out []Finding
+		for _, cfg := range flow.BuildCFGs(root, src) {
+			if depth := flow.DepthAtExit(cfg, src); depth > 0 {
+				out = append(out, Finding{
+					Message: fmt.Sprintf("transaction may be open when %s exits (max depth %d) — "+
+						"TCOMMIT/TROLLBACK on every path", cfg.LabelName, depth),
+					Line:    cfg.LabelRow + 1,
+					Col:     cfg.LabelCol + 1,
+					EndLine: cfg.LabelRow + 1,
+					EndCol:  cfg.LabelCol + 1 + len(cfg.LabelName),
+				})
+			}
+		}
+		return out
+	},
+}

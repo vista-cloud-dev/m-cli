@@ -32,6 +32,7 @@ func All() []Rule {
 		ruleArgumentCount,      // M-MOD-008
 		ruleCommandsPerLine,    // M-MOD-009
 		ruleLockLeak,           // M-MOD-025 (flow)
+		ruleTransactionLeak,    // M-MOD-026 (flow)
 		ruleAbbreviatedCommand, // M-STY-001
 	}
 }
