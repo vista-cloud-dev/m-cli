@@ -66,6 +66,35 @@ var ruleTransactionLeak = Rule{
 	},
 }
 
+// M-MOD-017 — read of $TEST without a $T-setting command (IF/OPEN/LOCK/READ/JOB)
+// guaranteed to have run on every path from the label entry. A forward
+// MUST-analysis (AND meet) over the same CFG decides freshness at each block;
+// reading $TEST where it is not fresh returns a value left over from before the
+// label was entered — almost always a bug. One finding per (label, source line).
+var ruleStaleTest = Rule{
+	ID:       "M-MOD-017",
+	Severity: Warning,
+	Category: "bug",
+	Title:    "$TEST read without preceding $T-setter (stale read)",
+	Tags:     []string{"modern"},
+	Inspect: func(root parse.Node, src []byte) []Finding {
+		var out []Finding
+		for _, cfg := range flow.BuildCFGs(root, src) {
+			for _, r := range flow.StaleTestReads(cfg, src) {
+				out = append(out, Finding{
+					Message: fmt.Sprintf("$TEST read in %s without a $T-setting command on every "+
+						"prior path — the value may be stale from a much earlier command", r.Label),
+					Line:    r.Line,
+					Col:     r.Col,
+					EndLine: r.Line,
+					EndCol:  r.EndCol,
+				})
+			}
+		}
+		return out
+	},
+}
+
 // M-MOD-024 — read of a local variable that may not have been SET on every path
 // from the label entry. A forward MUST-analysis (definite assignment) over the
 // per-label CFG; a use of a name not in the definitely-defined set entering its

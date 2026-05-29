@@ -7,6 +7,40 @@ import (
 	"github.com/vista-cloud-dev/m-cli/internal/lint"
 )
 
+// M-MOD-017: a $TEST read with no preceding $T-setter is a warning, anchored at
+// the read site. Tagged modern-only, so it is in the default profile.
+func TestStaleTestFlagged(t *testing.T) {
+	l := newLinter(t, lint.Profile("default"))
+	src := []byte("EN ;\n write $test\n quit\n")
+	findings, err := l.Lint(context.Background(), src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("got %d findings %+v, want 1 (M-MOD-017)", len(findings), findings)
+	}
+	f := findings[0]
+	if f.Rule != "M-MOD-017" || f.Severity != lint.Warning {
+		t.Errorf("got %+v, want rule M-MOD-017 severity warning", f)
+	}
+	if f.Line != 2 {
+		t.Errorf("anchor line = %d, want 2 (the read site)", f.Line)
+	}
+}
+
+// A $TEST read after a setter (READ) on every path is clean.
+func TestStaleTestClean(t *testing.T) {
+	l := newLinter(t, lint.Profile("default"))
+	src := []byte("EN ;\n read X:5\n write $test\n quit\n")
+	findings, err := l.Lint(context.Background(), src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(findings) != 0 {
+		t.Errorf("got %d findings %+v, want 0", len(findings), findings)
+	}
+}
+
 // M-MOD-024: a read of a local never assigned on any prior path is flagged as
 // an error, anchored at the read site. It is in modern (not default).
 func TestReadOfUndefinedFlagged(t *testing.T) {
