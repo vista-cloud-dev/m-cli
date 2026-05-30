@@ -5,6 +5,13 @@ import "context"
 // IrisEngine runs M on InterSystems IRIS via the `iris` binary (the VA target
 // engine). Routine source lives in IRIS.DAT, so EnsureLoaded imports a .mac
 // from the irissync mirror before it can run.
+//
+// Note on charset: Options.Chset has no effect on IRIS — byte mode is INHERENT
+// here. A Unicode IRIS instance round-trips all 256 byte values in-memory
+// ($char(200) is one char with $ascii 200), and IRIS has no process-wide
+// $ydb_chset analog to export. So `--chset m` is satisfied as a no-op and the
+// flag is accepted only to keep the CLI surface uniform across engines. (Raw
+// binary *device* I/O is a per-OPEN translation concern owned by the routine.)
 type IrisEngine struct {
 	bin       string
 	instance  string
