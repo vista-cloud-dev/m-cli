@@ -140,6 +140,41 @@ func Run(ctx context.Context, p *parse.Parser, eng engine.Engine, routinePaths, 
 	return Result{Lines: lines, Stdout: res.Stdout}, nil
 }
 
+// FileCov is one source file's coverage rollup.
+type FileCov struct {
+	Path    string
+	Covered int
+	Total   int
+}
+
+// Percent is the file's line coverage (0 when it has no executable lines).
+func (f FileCov) Percent() float64 {
+	if f.Total == 0 {
+		return 0
+	}
+	return 100 * float64(f.Covered) / float64(f.Total)
+}
+
+// ByFile rolls a Result up per source file in first-seen line order — the
+// shared rollup behind `m coverage`'s per-file report and `m watch --coverage`.
+func ByFile(r Result) []FileCov {
+	idx := map[string]int{}
+	var out []FileCov
+	for _, l := range r.Lines {
+		i, ok := idx[l.Path]
+		if !ok {
+			i = len(out)
+			idx[l.Path] = i
+			out = append(out, FileCov{Path: l.Path})
+		}
+		out[i].Total++
+		if l.Hits > 0 {
+			out[i].Covered++
+		}
+	}
+	return out
+}
+
 // LCOV renders the result as an LCOV tracefile (one SF block per source file).
 func LCOV(r Result) string {
 	byPath := map[string][]LineCov{}

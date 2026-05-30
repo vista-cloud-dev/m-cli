@@ -640,27 +640,11 @@ func (c *coverageCmd) Run(cc *clikit.Context) error {
 		}
 	}
 
-	// Per-file rollup.
-	type acc struct{ cov, tot int }
-	byPath := map[string]*acc{}
-	var order []string
-	for _, l := range result.Lines {
-		a := byPath[l.Path]
-		if a == nil {
-			a = &acc{}
-			byPath[l.Path] = a
-			order = append(order, l.Path)
-		}
-		a.tot++
-		if l.Hits > 0 {
-			a.cov++
-		}
-	}
 	report := coverageReport{
 		Engine: string(kind), Covered: result.Covered(), Total: result.Total(), Percent: result.Percent(),
 	}
-	for _, path := range order {
-		report.Files = append(report.Files, fileCov{Path: path, Covered: byPath[path].cov, Total: byPath[path].tot})
+	for _, fc := range mcov.ByFile(result) {
+		report.Files = append(report.Files, fileCov{Path: fc.Path, Covered: fc.Covered, Total: fc.Total})
 	}
 
 	if err := cc.Result(report, func() {
@@ -742,6 +726,7 @@ type watchCmd struct {
 
 	// Run half (engine-bound): re-run *TST.m suites on each change.
 	RunTests  bool     `name:"run" help:"Also run *TST.m suites on each change (the run half; needs an engine)."`
+	Coverage  bool     `help:"Also report line coverage for changed routines on each change (implies --run; needs an engine)."`
 	Engine    string   `help:"Engine for --run: ydb or iris (else $M_ENGINE / heuristic; exit 4 if unresolved)."`
 	Docker    string   `help:"Run --run suites inside this container via docker exec."`
 	Routines  []string `help:"Extra source dirs to stage for --run (e.g. m-stdlib/src). Repeatable."`
@@ -751,6 +736,8 @@ type watchCmd struct {
 func (c *watchCmd) Run(cc *clikit.Context) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
+
+	c.RunTests = c.RunTests || c.Coverage // coverage-on-save needs the engine-bound run path
 
 	p, err := parse.New(ctx)
 	if err != nil {
@@ -817,6 +804,9 @@ func (c *watchCmd) Run(cc *clikit.Context) error {
 	if c.RunTests {
 		mode = "lint+run"
 	}
+	if c.Coverage {
+		mode = "lint+run+cov"
+	}
 	fmt.Fprintln(cc.Stdout, cc.Faint(fmt.Sprintf("watching %s (%s, %s) — Ctrl+C to stop",
 		strings.Join(paths, ", "), mode, filter)))
 
@@ -828,7 +818,7 @@ func (c *watchCmd) Run(cc *clikit.Context) error {
 			c.checkFile(ctx, cc, p, linter, f) // static half
 		}
 		if c.RunTests && len(ev.Changed) > 0 {
-			c.runHalf(ctx, cc, staged, suites, ev.Changed) // run half
+			c.runHalf(ctx, cc, p, staged, suites, ev.Changed) // run half
 		}
 	}
 
@@ -840,17 +830,30 @@ func (c *watchCmd) Run(cc *clikit.Context) error {
 	return err
 }
 
-// runHalf re-stages the changed files and re-runs the suites through the engine,
-// printing a compact pass/fail summary (the engine-bound half of m watch).
-func (c *watchCmd) runHalf(ctx context.Context, cc *clikit.Context, staged *stagedEngine, suites []mtest.TestSuite, changed []string) {
+// runHalf re-stages the changed files and re-runs the affected suites through
+// the engine, printing a compact pass/fail summary (and, with --coverage, a
+// per-routine coverage rollup) — the engine-bound half of m watch.
+func (c *watchCmd) runHalf(ctx context.Context, cc *clikit.Context, p *parse.Parser, staged *stagedEngine, suites []mtest.TestSuite, changed []string) {
 	if len(suites) == 0 {
+		return
+	}
+	// Affected-test selection: run only the suites that exercise a changed
+	// routine — the suite file itself changed, or it calls a changed routine —
+	// rather than re-running the whole set on every save (spec §3.1/§9).
+	changedRtns := map[string]bool{}
+	for _, f := range changed {
+		changedRtns[strings.ToUpper(strings.TrimSuffix(filepath.Base(f), filepath.Ext(f)))] = true
+	}
+	affected := mtest.Affected(suites, changedRtns)
+	if len(affected) == 0 {
+		fmt.Fprintln(cc.Stdout, "  "+cc.Faint("tests: no suites affected"))
 		return
 	}
 	if err := staged.restage(changed); err != nil {
 		fmt.Fprintln(cc.Stdout, "  "+cc.Failure("run: stage failed: "+err.Error()))
 		return
 	}
-	results, err := mtest.Run(ctx, staged.eng, suites)
+	results, err := mtest.Run(ctx, staged.eng, affected)
 	if err != nil {
 		fmt.Fprintln(cc.Stdout, "  "+cc.Failure("run: "+err.Error()))
 		return
@@ -866,13 +869,45 @@ func (c *watchCmd) runHalf(ctx context.Context, cc *clikit.Context, staged *stag
 	total := pass + fail
 	if fail == 0 {
 		fmt.Fprintln(cc.Stdout, "  "+cc.Success(fmt.Sprintf("tests: %d/%d suites ok", pass, total)))
+	} else {
+		fmt.Fprintln(cc.Stdout, "  "+cc.Failure(fmt.Sprintf("tests: %d/%d suites failed", fail, total)))
+		for _, r := range results {
+			if !r.OK {
+				fmt.Fprintf(cc.Stdout, "    %s\n", cc.Failure(r.Suite))
+			}
+		}
+	}
+	if c.Coverage {
+		c.coverageHalf(ctx, cc, p, staged, affected, changed) // coverage-on-save
+	}
+}
+
+// coverageHalf measures line coverage for the changed routines while driving the
+// affected suites through the engine, printing a per-routine rollup. Coverage is
+// scoped to what just changed (not the whole tree) so the inner loop stays fast.
+func (c *watchCmd) coverageHalf(ctx context.Context, cc *clikit.Context, p *parse.Parser, staged *stagedEngine, affected []mtest.TestSuite, changed []string) {
+	var routinePaths []string
+	for _, f := range changed {
+		if isMFile(f) && !mtest.IsSuiteFile(f) {
+			routinePaths = append(routinePaths, f)
+		}
+	}
+	if len(routinePaths) == 0 {
+		return // only suites changed — no routine-under-test to measure
+	}
+	suiteEntries := make([]string, len(affected))
+	for i, s := range affected {
+		suiteEntries[i] = s.Name
+	}
+	result, err := mcov.Run(ctx, p, staged.eng, routinePaths, suiteEntries)
+	if err != nil {
+		fmt.Fprintln(cc.Stdout, "  "+cc.Failure("cov: "+err.Error()))
 		return
 	}
-	fmt.Fprintln(cc.Stdout, "  "+cc.Failure(fmt.Sprintf("tests: %d/%d suites failed", fail, total)))
-	for _, r := range results {
-		if !r.OK {
-			fmt.Fprintf(cc.Stdout, "    %s\n", cc.Failure(r.Suite))
-		}
+	for _, fc := range mcov.ByFile(result) {
+		fmt.Fprintf(cc.Stdout, "  %s %s  %d/%d  %s\n",
+			cc.Faint("cov:"), filepath.Base(fc.Path), fc.Covered, fc.Total,
+			cc.Faint(fmt.Sprintf("%.1f%%", fc.Percent())))
 	}
 }
 
