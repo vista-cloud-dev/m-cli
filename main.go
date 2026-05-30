@@ -24,10 +24,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/alecthomas/kong"
 	"github.com/willabides/kongplete"
 
 	"github.com/vista-cloud-dev/m-cli/clikit"
 	"github.com/vista-cloud-dev/m-cli/internal/config"
+	"github.com/vista-cloud-dev/m-cli/internal/dispatch"
 	"github.com/vista-cloud-dev/m-cli/internal/engine"
 	"github.com/vista-cloud-dev/m-cli/internal/lint"
 	"github.com/vista-cloud-dev/m-cli/internal/lsp"
@@ -43,14 +45,24 @@ import (
 type CLI struct {
 	clikit.Globals
 
-	Fmt      fmtCmd           `cmd:"" help:"Format M source over the parse tree (AST-preserving)."`
-	Lint     lintCmd          `cmd:"" help:"Lint M source over the parse tree (query-driven rules)."`
-	Lsp      lspCmd           `cmd:"" help:"Run the M language server (LSP 3.x over stdio)."`
-	Test     testCmd          `cmd:"" help:"Run *TST.m suites through the engine (^STDASSERT)."`
-	Coverage coverageCmd      `cmd:"" help:"Line coverage over the engine (YDB view \"TRACE\" → LCOV)."`
-	Watch    watchCmd         `cmd:"" help:"Re-run lint/fmt (and, with --run, tests) on M files as they change."`
-	Version  versionCmd       `cmd:"" help:"Show version, Go toolchain, and embedded grammar hash."`
-	Schema   clikit.SchemaCmd `cmd:"" help:"Emit the command/flag/enum tree as JSON (agent discovery)."`
+	Fmt      fmtCmd      `cmd:"" help:"Format M source over the parse tree (AST-preserving)."`
+	Lint     lintCmd     `cmd:"" help:"Lint M source over the parse tree (query-driven rules)."`
+	Lsp      lspCmd      `cmd:"" help:"Run the M language server (LSP 3.x over stdio)."`
+	Test     testCmd     `cmd:"" help:"Run *TST.m suites through the engine (^STDASSERT)."`
+	Coverage coverageCmd `cmd:"" help:"Line coverage over the engine (YDB view \"TRACE\" → LCOV)."`
+	Watch    watchCmd    `cmd:"" help:"Re-run lint/fmt (and, with --run, tests) on M files as they change."`
+
+	// Dispatched namespaces (spec §2.2): each forwards to a sibling binary.
+	// irissync owns the IRIS source axis; kids-vc owns the KIDS round-trip.
+	List   listCmd   `cmd:"" help:"List server routine docnames (→ irissync list)."`
+	Pull   pullCmd   `cmd:"" help:"Materialize IRIS routine source → mirror (→ irissync pull)."`
+	Status statusCmd `cmd:"" help:"Diff server vs. local manifest (→ irissync status)."`
+	Verify verifyCmd `cmd:"" help:"Re-hash mirror vs. manifest (→ irissync verify)."`
+	Push   pushCmd   `cmd:"" help:"Write edited routines back to IRIS — the sole DB writer (→ irissync push)."`
+	Kids   kidsCmd   `cmd:"" help:"KIDS decompose/assemble/roundtrip/lint (→ kids-vc)."`
+
+	Version versionCmd `cmd:"" help:"Show version, Go toolchain, and embedded grammar hash."`
+	Schema  schemaCmd  `cmd:"" help:"Emit the aggregated command/flag/enum tree as JSON (agent discovery)."`
 
 	InstallCompletions kongplete.InstallCompletions `cmd:"" help:"Install shell tab-completions."`
 }
@@ -938,4 +950,79 @@ func (versionCmd) Run(cc *clikit.Context) error {
 			[2]string{"grammar", info.GrammarHash},
 		)
 	})
+}
+
+// --- dispatch (the busybox) --------------------------------------------------
+//
+// Each dispatched command captures its remaining args verbatim (Kong
+// passthrough) and forwards them to a sibling binary via internal/dispatch.
+// The native commands above are `m`'s own; everything here is a sibling's
+// surface fronted under one `m` (spec §2.2).
+
+// pass is the shared passthrough arg: every token after the verb is forwarded
+// to the sibling untouched (flags included).
+type pass struct {
+	Rest []string `arg:"" optional:"" passthrough:"" help:"Arguments forwarded verbatim to the sibling binary."`
+}
+
+type (
+	listCmd   struct{ pass }
+	pullCmd   struct{ pass }
+	statusCmd struct{ pass }
+	verifyCmd struct{ pass }
+	pushCmd   struct{ pass }
+	kidsCmd   struct{ pass }
+)
+
+func (c *listCmd) Run(cc *clikit.Context) error   { return dispatchRun(cc, "list", c.Rest) }
+func (c *pullCmd) Run(cc *clikit.Context) error   { return dispatchRun(cc, "pull", c.Rest) }
+func (c *statusCmd) Run(cc *clikit.Context) error { return dispatchRun(cc, "status", c.Rest) }
+func (c *verifyCmd) Run(cc *clikit.Context) error { return dispatchRun(cc, "verify", c.Rest) }
+func (c *pushCmd) Run(cc *clikit.Context) error   { return dispatchRun(cc, "push", c.Rest) }
+func (c *kidsCmd) Run(cc *clikit.Context) error   { return dispatchRun(cc, "kids", c.Rest) }
+
+// dispatchRun forwards a dispatched verb to its sibling, faithfully relaying the
+// child's exit code. A resolution failure surfaces as `m`'s own deterministic
+// error (rendered by clikit); a non-zero child exit becomes `m`'s exit code
+// without double-rendering, since the child already wrote its own output.
+func dispatchRun(cc *clikit.Context, verb string, rest []string) error {
+	spec, ok := dispatch.Find(verb)
+	if !ok {
+		return clikit.Fail(clikit.ExitUsage, "UNKNOWN_DISPATCH", "no sibling dispatch for "+verb, "")
+	}
+	code, err := dispatch.Run(context.Background(), spec, dispatchGlobals(cc), rest,
+		os.Stdin, os.Stdout, os.Stderr)
+	if err != nil {
+		return err
+	}
+	if code != clikit.ExitOK {
+		os.Exit(code)
+	}
+	return nil
+}
+
+// dispatchGlobals reconstructs the toolchain-wide global flags `m` resolved so
+// the sibling renders/behaves identically — Kong consumes these even after the
+// verb, so they must be re-forwarded (the siblings share clikit.Globals).
+func dispatchGlobals(cc *clikit.Context) []string {
+	g := []string{"--output", string(cc.Format)}
+	if cc.Verbose {
+		g = append(g, "--verbose")
+	}
+	if cc.Format == clikit.FormatText && !cc.Color {
+		g = append(g, "--no-color")
+	}
+	return g
+}
+
+// --- schema (aggregated) -----------------------------------------------------
+
+// schemaCmd emits the full command tree as JSON like clikit's, then merges each
+// available sibling's sub-schema so an agent sees one tree (spec §2.2/§5.5).
+type schemaCmd struct{}
+
+func (schemaCmd) Run(cc *clikit.Context, k *kong.Kong) error {
+	doc := clikit.BuildSchema(k, k.Model.Name, clikit.Version)
+	doc = dispatch.Aggregate(context.Background(), doc)
+	return cc.EmitJSON(doc)
 }

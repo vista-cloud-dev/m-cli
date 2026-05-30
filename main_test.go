@@ -3,8 +3,12 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
+	"github.com/alecthomas/kong"
+
+	"github.com/vista-cloud-dev/m-cli/clikit"
 	"github.com/vista-cloud-dev/m-cli/internal/config"
 )
 
@@ -53,6 +57,51 @@ func TestDiscover(t *testing.T) {
 	}
 	if len(files) != 1 || files[0] != odd {
 		t.Errorf("discover explicit file: got %v, want [%s]", files, odd)
+	}
+}
+
+func TestDispatchedCommandsCapturePassthrough(t *testing.T) {
+	// The dispatched verbs must capture every following token verbatim (Kong
+	// passthrough) so sibling flags are forwarded untouched, not parsed by `m`.
+	cli := &CLI{}
+	k, err := kong.New(cli, kong.Name("m"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := k.Parse([]string{"pull", "--force", "R1", "--unknown-to-m"}); err != nil {
+		t.Fatalf("parse passthrough: %v", err)
+	}
+	if got, want := cli.Pull.Rest, []string{"--force", "R1", "--unknown-to-m"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("pull passthrough = %v, want %v", got, want)
+	}
+
+	cli = &CLI{}
+	k, _ = kong.New(cli, kong.Name("m"))
+	if _, err := k.Parse([]string{"kids", "decompose", "x.KID"}); err != nil {
+		t.Fatalf("parse kids: %v", err)
+	}
+	if got, want := cli.Kids.Rest, []string{"decompose", "x.KID"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("kids passthrough = %v, want %v", got, want)
+	}
+}
+
+func TestDispatchGlobals(t *testing.T) {
+	cases := []struct {
+		name string
+		cc   *clikit.Context
+		want []string
+	}{
+		{"json", &clikit.Context{Format: clikit.FormatJSON}, []string{"--output", "json"}},
+		{"text", &clikit.Context{Format: clikit.FormatText, Color: true}, []string{"--output", "text"}},
+		{"text no-color", &clikit.Context{Format: clikit.FormatText, Color: false}, []string{"--output", "text", "--no-color"}},
+		{"verbose json", &clikit.Context{Format: clikit.FormatJSON, Verbose: true}, []string{"--output", "json", "--verbose"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := dispatchGlobals(tc.cc); !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("dispatchGlobals = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 

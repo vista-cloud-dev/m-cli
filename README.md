@@ -6,17 +6,19 @@ working across **YottaDB and IRIS** (spec §1). It's the Go rewrite of the Pytho
 `m-cli`, built on the [`m-parse`](https://github.com/vista-cloud-dev/m-parse)
 substrate (tree-sitter-m via wazero — no CGO).
 
-> **Status: early.** This stage ships **`m fmt`** (the AST-preserving
-> formatter). `lint`/`lsp`/`test`/`coverage`/`watch` land in subsequent stages
-> per the [implementation plan](https://github.com/vista-cloud-dev/docs).
+> **Status.** The native commands `fmt`/`lint`/`lsp`/`test`/`coverage`/`watch`
+> are built, and `m` is now the **busybox dispatcher**: it fronts the sibling
+> binaries `irissync` (IRIS source axis) and `kids-vc` (KIDS round-trip) under
+> one `m`, with one aggregated `m schema`. See the
+> [implementation plan](https://github.com/vista-cloud-dev/docs).
 
 ```sh
-m fmt routine.m                      # report whether it needs formatting
-m fmt --rules=canonical --write .    # uppercase command keywords in place
 m fmt --rules=canonical --check .    # CI gate: exit 3 if any file differs
-cat routine.m | m fmt --rules=canonical --stdin
-m version        # version + Go toolchain + embedded grammar hash
-m schema | jq .  # the command/flag tree as JSON (agent discovery)
+m lint --profile xindex routine.m    # query-driven rules over the parse tree
+m test --engine ydb …                # run *TST.m suites through the engine
+m pull --full                        # → irissync pull (materialize IRIS source)
+m kids decompose patch.KID           # → kids-vc decompose
+m schema | jq .                      # the full aggregated tree as JSON
 ```
 
 ---
@@ -47,6 +49,33 @@ raw filter). With no flags it reports what *would* change (exit 0).
 `.int` is included because VistA loaded via `^%RI` stores its routine source as
 `.int` (there `.int` *is* the source, not compiler output). Explicit file
 arguments are formatted as given.
+
+## The busybox — dispatched subcommands
+
+`m` keeps its native commands and **dispatches** the rest to sibling binaries,
+so each sibling keeps its own SBOM and release cadence — a small attestable
+family, not one mixed-dep blob (spec §2.2, ADR §5):
+
+| `m` command | Forwards to | Notes |
+|---|---|---|
+| `m list` · `m pull` · `m status` · `m verify` · `m push` | **`irissync`** | the IRIS source axis (`push` is the sole DB writer) |
+| `m kids <decompose\|assemble\|roundtrip\|canonicalize\|lint\|parse>` | **`kids-vc`** | KIDS round-trip + PIKS data-class gate |
+
+- **Discovery.** Each sibling is resolved in order: the `M_<NAME>_BIN` override
+  (e.g. `M_IRISSYNC_BIN`, `M_KIDS_VC_BIN`), then alongside the `m` binary, then
+  `$PATH`. A miss is a deterministic `SIBLING_NOT_FOUND` error object (exit 1) —
+  never a panic or a raw exec error.
+- **Faithful passthrough.** Args, stdin/stdout/stderr, and the child's exit code
+  pass through unchanged; the toolchain-wide globals (`--output`, `--verbose`,
+  `--no-color`) are re-forwarded so the sibling renders identically.
+- **One tree.** `m schema` aggregates each available sibling's sub-schema under
+  its dispatched namespace, so an agent sees a single command tree. Siblings
+  that aren't installed degrade to a discoverable stub (the schema stays valid).
+
+> **Extension point.** Adding a dispatched namespace (e.g. `m meta …` →
+> `vista-meta`, deferred) is a one-line `Spec` in `internal/dispatch`; nothing
+> else changes. Discovery, forwarding, and schema aggregation all key off that
+> registry.
 
 ## Architecture
 
