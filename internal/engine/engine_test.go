@@ -103,6 +103,67 @@ func TestIrisCommands(t *testing.T) {
 	}
 }
 
+// TestYdbChset verifies that Options.Chset is translated to an `env ydb_chset=…`
+// prefix on every YDB invocation (byte mode for binary suites), and that the
+// unset default leaves argv untouched (no regression on UTF-8 runs).
+func TestYdbChset(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("m maps to ydb_chset=M", func(t *testing.T) {
+		c := &capture{}
+		e := New(YDB, Options{Runner: c.run, Chset: "m"})
+
+		_, _ = e.RunRoutine(ctx, "^FOO", "a")
+		if got := strings.Join(c.argv, " "); got != "env ydb_chset=M ydb -run ^FOO a" {
+			t.Errorf("RunRoutine argv = %q", got)
+		}
+		_, _ = e.RunXCmd(ctx, "set ^X=1")
+		if got := strings.Join(c.argv, " "); got != "env ydb_chset=M ydb -run %XCMD set ^X=1" {
+			t.Errorf("RunXCmd argv = %q", got)
+		}
+		_, _ = e.RunScript(ctx, "halt\n")
+		if got := strings.Join(c.argv, " "); got != "env ydb_chset=M ydb -direct" {
+			t.Errorf("RunScript argv = %q", got)
+		}
+	})
+
+	t.Run("utf-8 maps to ydb_chset=UTF-8", func(t *testing.T) {
+		c := &capture{}
+		e := New(YDB, Options{Runner: c.run, Chset: "utf-8"})
+		_, _ = e.RunRoutine(ctx, "^FOO")
+		if got := strings.Join(c.argv, " "); got != "env ydb_chset=UTF-8 ydb -run ^FOO" {
+			t.Errorf("RunRoutine argv = %q", got)
+		}
+	})
+
+	t.Run("unset leaves argv unchanged", func(t *testing.T) {
+		c := &capture{}
+		e := New(YDB, Options{Runner: c.run})
+		_, _ = e.RunRoutine(ctx, "^FOO")
+		if got := strings.Join(c.argv, " "); got != "ydb -run ^FOO" {
+			t.Errorf("RunRoutine argv = %q", got)
+		}
+	})
+}
+
+// TestIrisChset verifies that Chset is a no-op on IRIS: byte semantics are
+// inherent (Unicode build round-trips all 256 byte values), and IRIS has no
+// ydb_chset analog, so the invocation must be identical with or without it.
+func TestIrisChset(t *testing.T) {
+	ctx := context.Background()
+	with := &capture{}
+	without := &capture{}
+	New(IRIS, Options{Runner: with.run, Instance: "VISTA", Namespace: "VISTA", Chset: "m"}).RunRoutine(ctx, "^FOO")
+	New(IRIS, Options{Runner: without.run, Instance: "VISTA", Namespace: "VISTA"}).RunRoutine(ctx, "^FOO")
+
+	if w, wo := strings.Join(with.argv, " "), strings.Join(without.argv, " "); w != wo {
+		t.Errorf("IRIS argv differs with chset: %q vs %q", w, wo)
+	}
+	if with.stdin != without.stdin {
+		t.Errorf("IRIS stdin differs with chset: %q vs %q", with.stdin, without.stdin)
+	}
+}
+
 func TestLocalRunnerExitCode(t *testing.T) {
 	res, err := LocalRunner(context.Background(), []string{"sh", "-c", "printf hi; exit 3"}, "")
 	if err != nil {
