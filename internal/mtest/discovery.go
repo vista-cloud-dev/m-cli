@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/vista-cloud-dev/m-cli/internal/workspace"
 	"github.com/vista-cloud-dev/m-parse/parse"
 )
 
@@ -25,6 +26,7 @@ type TestSuite struct {
 	Path     string
 	Protocol string // routine hosting start/report (STDASSERT, TESTRUN, …)
 	Cases    []TestCase
+	Deps     []string // external routines the suite calls (upper, sorted) — for affected-test selection
 }
 
 var (
@@ -158,10 +160,59 @@ func Discover(p *parse.Parser, paths []string) ([]TestSuite, error) {
 		if err != nil {
 			return nil, err
 		}
-		suites = append(suites, TestSuite{Name: name, Path: f, Protocol: DetectProtocol(src), Cases: cases})
+		deps, err := ReferencedRoutines(p, src)
+		if err != nil {
+			return nil, err
+		}
+		suites = append(suites, TestSuite{Name: name, Path: f, Protocol: DetectProtocol(src), Cases: cases, Deps: deps})
 	}
 	sort.Slice(suites, func(i, j int) bool { return suites[i].Name < suites[j].Name })
 	return suites, nil
+}
+
+// ReferencedRoutines returns the external routines src calls out to — every
+// LABEL^ROUTINE / ^ROUTINE / $$^ROUTINE site — upper-cased and sorted. Local
+// (bare-label / intra-routine) calls are excluded: they add no cross-file
+// dependency. This maps a changed routine to the suites that exercise it.
+func ReferencedRoutines(p *parse.Parser, src []byte) ([]string, error) {
+	tree, err := p.Parse(context.Background(), src)
+	if err != nil {
+		return nil, err
+	}
+	defer tree.Close()
+	set := map[string]bool{}
+	for _, r := range workspace.References(tree.RootNode(), "") {
+		if r.TargetRoutine != "" { // "" == current routine (a local call)
+			set[r.TargetRoutine] = true
+		}
+	}
+	out := make([]string, 0, len(set))
+	for r := range set {
+		out = append(out, r)
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// Affected returns the suites that exercise any of the changed routines: a
+// suite matches when its own routine changed (the suite file itself) or it
+// references a changed routine via its Deps. changed holds upper-cased routine
+// names. Order is preserved from suites.
+func Affected(suites []TestSuite, changed map[string]bool) []TestSuite {
+	var out []TestSuite
+	for _, s := range suites {
+		if changed[strings.ToUpper(s.Name)] {
+			out = append(out, s)
+			continue
+		}
+		for _, d := range s.Deps {
+			if changed[d] {
+				out = append(out, s)
+				break
+			}
+		}
+	}
+	return out
 }
 
 func childOfType(n parse.Node, typ string) (parse.Node, bool) {
