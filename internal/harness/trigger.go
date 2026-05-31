@@ -28,3 +28,17 @@ func Trigger(ctx context.Context, eng engine.Engine, scope []string) (string, er
 	}
 	return res.Stdout, nil
 }
+
+// TriggerCoverage invokes cov^STDHARN, which runs the scope under the IRIS line
+// monitor over the named routines and adds a raw ##MON block to the frame (the
+// host joins it via mcov.FromMonitor). On YDB the ##MON block is empty by design
+// (YDB coverage stays the host-side view "TRACE" path); resident coverage is the
+// IRIS tier.
+func TriggerCoverage(ctx context.Context, eng engine.Engine, scope, routines []string) (string, error) {
+	script := "do cov^STDHARN(\"" + strings.Join(scope, " ") + "\",\"" + strings.Join(routines, " ") + "\")\nhalt\n"
+	res, err := eng.RunScript(ctx, script)
+	if err != nil {
+		return "", err
+	}
+	return res.Stdout, nil
+}

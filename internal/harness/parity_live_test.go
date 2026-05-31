@@ -141,7 +141,7 @@ func residentParity(t *testing.T, kind engine.Kind, container, namespace, stdlib
 	if err != nil {
 		t.Fatalf("Trigger: %v", err)
 	}
-	blocks, _, meta, err := harness.SplitFrame(frame)
+	blocks, _, _, meta, err := harness.SplitFrame(frame)
 	if err != nil {
 		t.Fatalf("SplitFrame: %v\nframe:\n%s", err, frame)
 	}

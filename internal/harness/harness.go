@@ -22,6 +22,8 @@ const (
 	hdrSuite   = "##SUITE"       // ##SUITE ^NAME
 	hdrEnd     = "##END"         // ##END ^NAME exit=N  (closes a suite)
 	hdrLCOV    = "##LCOV"        // ##LCOV … verbatim LCOV tracefile
+	hdrMon     = "##MON"         // ##MON … raw IRIS line-monitor counts (MLINE:…)
+	hdrEndMon  = "##END-MON"     // closes the ##MON block
 	hdrTrailer = "##END-HARNESS" // trailer: suites=/pass=/fail= cross-check
 )
 
@@ -57,19 +59,22 @@ type FrameMeta struct {
 }
 
 // SplitFrame splits the result frame (§3.2) into per-suite ^STDASSERT blocks,
-// the LCOV block (empty when coverage was not requested), and the provenance /
-// summary metadata. It is delimiter-scanning only — no test or coverage parsing
-// happens here. Unrecognized ## directives are skipped (forward-compat). A
-// missing header is ErrNoFrame; a missing/mismatched trailer is ErrTruncated,
-// returned alongside whatever was parsed so a caller can still render it.
-func SplitFrame(frame string) ([]SuiteBlock, string, FrameMeta, error) {
+// the LCOV block, the raw ##MON line-monitor block (both empty when coverage was
+// not requested), and the provenance / summary metadata. It is delimiter-
+// scanning only — no test or coverage parsing happens here. Unrecognized ##
+// directives are skipped (forward-compat). A missing header is ErrNoFrame; a
+// missing/mismatched trailer is ErrTruncated, returned alongside whatever was
+// parsed so a caller can still render it.
+func SplitFrame(frame string) ([]SuiteBlock, string, string, FrameMeta, error) {
 	var (
 		meta       FrameMeta
 		suites     []SuiteBlock
 		lcov       strings.Builder
+		mon        strings.Builder
 		sawHeader  bool
 		sawTrailer bool
 		inLCOV     bool
+		inMon      bool
 		cur        *SuiteBlock
 		body       strings.Builder
 	)
@@ -90,15 +95,20 @@ func SplitFrame(frame string) ([]SuiteBlock, string, FrameMeta, error) {
 			parseHeader(line, &meta)
 		case strings.HasPrefix(line, hdrTrailer):
 			flushSuite()
-			inLCOV = false
+			inLCOV, inMon = false, false
 			sawTrailer = true
 			parseTrailer(line, &meta)
 		case strings.HasPrefix(line, hdrSuite):
 			flushSuite()
-			inLCOV = false
+			inLCOV, inMon = false, false
 			name := strings.TrimSpace(strings.TrimPrefix(line, hdrSuite))
 			name = strings.TrimPrefix(name, "^")
 			cur = &SuiteBlock{Name: name, Exit: -1}
+		case line == hdrMon || strings.HasPrefix(line, hdrMon+" "):
+			flushSuite()
+			inLCOV, inMon = false, true
+		case strings.HasPrefix(line, hdrEndMon):
+			inMon = false
 		case strings.HasPrefix(line, hdrEnd) && !strings.HasPrefix(line, hdrTrailer):
 			if cur != nil {
 				cur.Exit = parseExit(line)
@@ -109,9 +119,12 @@ func SplitFrame(frame string) ([]SuiteBlock, string, FrameMeta, error) {
 			}
 		case line == hdrLCOV || strings.HasPrefix(line, hdrLCOV+" "):
 			flushSuite()
-			inLCOV = true
+			inLCOV, inMon = true, false
 		case strings.HasPrefix(line, "##"):
 			// Unknown directive — skip, never fatal (forward-compat).
+		case inMon:
+			mon.WriteString(line)
+			mon.WriteByte('\n')
 		case inLCOV:
 			lcov.WriteString(line)
 			lcov.WriteByte('\n')
@@ -123,12 +136,12 @@ func SplitFrame(frame string) ([]SuiteBlock, string, FrameMeta, error) {
 	flushSuite()
 
 	if !sawHeader {
-		return suites, lcov.String(), meta, ErrNoFrame
+		return suites, lcov.String(), mon.String(), meta, ErrNoFrame
 	}
 	if !sawTrailer || meta.Suites != len(suites) {
-		return suites, lcov.String(), meta, ErrTruncated
+		return suites, lcov.String(), mon.String(), meta, ErrTruncated
 	}
-	return suites, lcov.String(), meta, nil
+	return suites, lcov.String(), mon.String(), meta, nil
 }
 
 // parseHeader reads `##M-HARNESS frame=1 tier=integration engine=iris ns=VEHU`.

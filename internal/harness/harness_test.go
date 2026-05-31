@@ -21,7 +21,7 @@ func goldenFrame(t *testing.T) string {
 }
 
 func TestSplitFrameMeta(t *testing.T) {
-	suites, lcov, meta, err := harness.SplitFrame(goldenFrame(t))
+	suites, lcov, _, meta, err := harness.SplitFrame(goldenFrame(t))
 	if err != nil {
 		t.Fatalf("SplitFrame: %v", err)
 	}
@@ -43,7 +43,7 @@ func TestSplitFrameMeta(t *testing.T) {
 // ^STDASSERT text that the UNCHANGED mtest.ParseOutput consumes — no new parse
 // logic in the splitter.
 func TestSplitFrameSuiteBlocksRoundTripThroughMtest(t *testing.T) {
-	suites, _, _, err := harness.SplitFrame(goldenFrame(t))
+	suites, _, _, _, err := harness.SplitFrame(goldenFrame(t))
 	if err != nil {
 		t.Fatalf("SplitFrame: %v", err)
 	}
@@ -73,7 +73,7 @@ func TestSplitFrameSuiteBlocksRoundTripThroughMtest(t *testing.T) {
 
 // The ##LCOV block is verbatim LCOV the UNCHANGED mcov consumers understand.
 func TestSplitFrameLCOVRoundTripsThroughMcov(t *testing.T) {
-	_, lcov, _, err := harness.SplitFrame(goldenFrame(t))
+	_, lcov, _, _, err := harness.SplitFrame(goldenFrame(t))
 	if err != nil {
 		t.Fatalf("SplitFrame: %v", err)
 	}
@@ -91,7 +91,7 @@ func TestSplitFrameTruncatedStreamDetected(t *testing.T) {
 	full := goldenFrame(t)
 	// Drop the ##END-HARNESS trailer — a dropped connection.
 	cut := full[:strings.Index(full, "##END-HARNESS")]
-	suites, _, _, err := harness.SplitFrame(cut)
+	suites, _, _, _, err := harness.SplitFrame(cut)
 	if !errors.Is(err, harness.ErrTruncated) {
 		t.Fatalf("err = %v, want ErrTruncated", err)
 	}
@@ -102,7 +102,7 @@ func TestSplitFrameTruncatedStreamDetected(t *testing.T) {
 }
 
 func TestSplitFrameMissingHeader(t *testing.T) {
-	_, _, _, err := harness.SplitFrame("##SUITE ^X\nAll tests passed.\n##END ^X exit=0\n")
+	_, _, _, _, err := harness.SplitFrame("##SUITE ^X\nAll tests passed.\n##END ^X exit=0\n")
 	if !errors.Is(err, harness.ErrNoFrame) {
 		t.Fatalf("err = %v, want ErrNoFrame", err)
 	}
@@ -115,7 +115,7 @@ func TestSplitFrameUnknownDirectiveSkipped(t *testing.T) {
 		"##FUTURE something\n" +
 		"##SUITE ^XTST\nAll tests passed.\nResults: 1 tests  1 passed  0 failed\n##END ^XTST exit=0\n" +
 		"##END-HARNESS suites=1 pass=1 fail=0\n"
-	suites, _, meta, err := harness.SplitFrame(frame)
+	suites, _, _, meta, err := harness.SplitFrame(frame)
 	if err != nil {
 		t.Fatalf("SplitFrame: %v", err)
 	}
@@ -124,5 +124,26 @@ func TestSplitFrameUnknownDirectiveSkipped(t *testing.T) {
 	}
 	if len(suites) != 1 || suites[0].Name != "XTST" {
 		t.Fatalf("suites = %+v, want one XTST", suites)
+	}
+}
+
+// The raw ##MON line-monitor block (resident IRIS coverage) is captured verbatim
+// for the host to join via mcov.FromMonitor — and it never collides with the
+// suite/LCOV blocks (##END-MON is not a suite ##END).
+func TestSplitFrameMonBlock(t *testing.T) {
+	frame := "##M-HARNESS frame=1 tier=integration engine=iris ns=USER\n" +
+		"##SUITE ^XTST\nAll tests passed.\nResults: 1 tests  1 passed  0 failed\n##END ^XTST exit=0\n" +
+		"##MON\nMLINE:STDMATH:41:14\nMLINE:STDMATH:42:0\n##END-MON\n" +
+		"##END-HARNESS suites=1 pass=1 fail=0\n"
+	suites, _, mon, _, err := harness.SplitFrame(frame)
+	if err != nil {
+		t.Fatalf("SplitFrame: %v", err)
+	}
+	if len(suites) != 1 || suites[0].Name != "XTST" || suites[0].Exit != 0 {
+		t.Fatalf("suites = %+v, want one XTST exit=0 (##END-MON must not close it)", suites)
+	}
+	want := "MLINE:STDMATH:41:14\nMLINE:STDMATH:42:0\n"
+	if mon != want {
+		t.Errorf("mon = %q, want %q", mon, want)
 	}
 }
