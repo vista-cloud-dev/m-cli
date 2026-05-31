@@ -20,13 +20,43 @@ type TestCase struct {
 	Line        int
 }
 
+// Tier classifies where a suite is authoritative (spec §9.1-Q6, design §3.4).
+const (
+	// TierPureLogic suites are deterministic, with no live DD/data dependency.
+	// They run file-side (host-orchestrated) and are the PR gate. The safe
+	// default for an untagged suite.
+	TierPureLogic = "pure-logic"
+	// TierIntegration suites exist because of the live FileMan DD + populated
+	// globals and cannot be reproduced file-side. They run resident (in the dev
+	// IRIS, next to the data).
+	TierIntegration = "integration"
+)
+
 // TestSuite is one *TST.m file with its cases.
 type TestSuite struct {
 	Name     string
 	Path     string
 	Protocol string // routine hosting start/report (STDASSERT, TESTRUN, …)
+	Tier     string // TierPureLogic (default) | TierIntegration — see DetectTier
 	Cases    []TestCase
 	Deps     []string // external routines the suite calls (upper, sorted) — for affected-test selection
+}
+
+// reTier matches a suite-level `; tier: <tier>` directive inside any M comment
+// (one or more `;`, case-insensitive), so a suite can opt into the integration
+// tier on its own line or inline on the first label line.
+var reTier = regexp.MustCompile(`(?i);[;\s]*tier\s*:\s*(\S+)`)
+
+// DetectTier reads the suite's tier directive. An untagged suite is
+// TierPureLogic — the safe default that keeps it the file-side PR gate; only an
+// explicit `;; tier: integration` moves it to the resident tier.
+func DetectTier(src []byte) string {
+	if m := reTier.FindSubmatch(src); m != nil {
+		if strings.EqualFold(string(m[1]), TierIntegration) {
+			return TierIntegration
+		}
+	}
+	return TierPureLogic
 }
 
 var (
@@ -164,7 +194,7 @@ func Discover(p *parse.Parser, paths []string) ([]TestSuite, error) {
 		if err != nil {
 			return nil, err
 		}
-		suites = append(suites, TestSuite{Name: name, Path: f, Protocol: DetectProtocol(src), Cases: cases, Deps: deps})
+		suites = append(suites, TestSuite{Name: name, Path: f, Protocol: DetectProtocol(src), Tier: DetectTier(src), Cases: cases, Deps: deps})
 	}
 	sort.Slice(suites, func(i, j int) bool { return suites[i].Name < suites[j].Name })
 	return suites, nil
