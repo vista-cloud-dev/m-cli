@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/vista-cloud-dev/m-cli/internal/engine"
+	"github.com/vista-cloud-dev/m-parse/parse"
 )
 
 // IRIS line coverage uses the %Monitor.System.LineByLine monitor (^%MONLBL),
@@ -73,7 +74,15 @@ func runIris(ctx context.Context, eng engine.Engine, execs []ExecLine, routineNa
 	if err != nil {
 		return Result{}, err
 	}
-	hits := parseMon(res.Stdout)
+	return joinMon(execs, res.Stdout), nil
+}
+
+// joinMon joins raw per-line monitor counts (MLINE:routine:line:count) to the
+// executable lines — the parse-tree denominator. Shared by the host-orchestrated
+// runIris and the resident FromMonitor, so both produce the same Result from the
+// same monitor data.
+func joinMon(execs []ExecLine, monStdout string) Result {
+	hits := parseMon(monStdout)
 	lines := make([]LineCov, 0, len(execs))
 	for _, ex := range execs {
 		lines = append(lines, LineCov{
@@ -81,5 +90,19 @@ func runIris(ctx context.Context, eng engine.Engine, execs []ExecLine, routineNa
 			Hits: hits[monKey{strings.ToUpper(ex.Routine), ex.Line}],
 		})
 	}
-	return Result{Lines: lines, Stdout: res.Stdout}, nil
+	return Result{Lines: lines, Stdout: monStdout}
+}
+
+// FromMonitor builds a coverage Result from a raw ##MON block (the MLINE lines
+// the resident harness's IRIS line monitor emits, design §3.2) joined to the
+// executable lines of routinePaths. The executable-line denominator stays
+// host-side (the parse tree) and the monitor data is identical to what the
+// host-orchestrated runIris collects, so resident coverage == file-side coverage
+// by construction (G4). The host owns the parse tree the resident M side lacks.
+func FromMonitor(p *parse.Parser, monText string, routinePaths []string) (Result, error) {
+	execs, err := DiscoverExecutables(p, routinePaths)
+	if err != nil {
+		return Result{}, err
+	}
+	return joinMon(execs, monText), nil
 }

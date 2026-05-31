@@ -31,6 +31,7 @@ import (
 	"github.com/vista-cloud-dev/m-cli/internal/config"
 	"github.com/vista-cloud-dev/m-cli/internal/dispatch"
 	"github.com/vista-cloud-dev/m-cli/internal/engine"
+	"github.com/vista-cloud-dev/m-cli/internal/harness"
 	"github.com/vista-cloud-dev/m-cli/internal/lint"
 	"github.com/vista-cloud-dev/m-cli/internal/lsp"
 	"github.com/vista-cloud-dev/m-cli/internal/mcov"
@@ -412,10 +413,12 @@ type testCmd struct {
 	Docker    string   `help:"Run inside this running container via docker exec (e.g. m-test-engine, vista-iris)."`
 	Routines  []string `help:"Extra source dirs to stage (e.g. m-stdlib/src for ^STDASSERT). Repeatable."`
 	Namespace string   `help:"IRIS namespace (default USER)."`
+	Resident  bool     `help:"Run ';; tier: integration' suites via the resident harness (RUN^STDHARN) and reconcile with file-side pure-logic suites (spec §9)."`
 }
 
 type suiteResult struct {
 	Suite  string `json:"suite"`
+	Tier   string `json:"tier,omitempty"`
 	Passed int    `json:"passed"`
 	Failed int    `json:"failed"`
 	Total  int    `json:"total"`
@@ -494,21 +497,22 @@ func (c *testCmd) Run(cc *clikit.Context) error {
 		} else {
 			eng = engine.New(kind, engine.Options{Namespace: c.Namespace})
 		}
-		results, runErr := mtest.Run(ctx, eng, suites)
-		if runErr != nil {
-			return clikit.Fail(clikit.ExitRuntime, "ENGINE_RUN", runErr.Error(),
-				"m test runs on a live engine — is ydb/iris installed and reachable?")
+		var rows []suiteResult
+		if c.Resident {
+			rows, err = runTwoTier(ctx, eng, suites)
+		} else {
+			rows, err = runOneTier(ctx, eng, suites)
 		}
-		for _, r := range results {
-			report.Passed += r.Summary.Passed
-			report.Failed += r.Summary.Failed
+		if err != nil {
+			return err
+		}
+		for _, r := range rows {
+			report.Passed += r.Passed
+			report.Failed += r.Failed
 			if !r.OK {
 				failedSuites++
 			}
-			report.Results = append(report.Results, suiteResult{
-				Suite: r.Suite, Passed: r.Summary.Passed, Failed: r.Summary.Failed,
-				Total: r.Summary.Total, OK: r.OK,
-			})
+			report.Results = append(report.Results, r)
 		}
 	}
 
@@ -539,6 +543,61 @@ func (c *testCmd) Run(cc *clikit.Context) error {
 			fmt.Sprintf("%d of %d suite(s) failed", failedSuites, report.Suites), "")
 	}
 	return nil
+}
+
+// runOneTier is the default host-orchestrated path: every suite runs file-side.
+func runOneTier(ctx context.Context, eng engine.Engine, suites []mtest.TestSuite) ([]suiteResult, error) {
+	results, err := mtest.Run(ctx, eng, suites)
+	if err != nil {
+		return nil, clikit.Fail(clikit.ExitRuntime, "ENGINE_RUN", err.Error(),
+			"m test runs on a live engine — is ydb/iris installed and reachable?")
+	}
+	tier := map[string]string{}
+	for _, s := range suites {
+		tier[s.Name] = s.Tier
+	}
+	rows := make([]suiteResult, 0, len(results))
+	for _, r := range results {
+		rows = append(rows, toRow(r, tier[r.Suite]))
+	}
+	return rows, nil
+}
+
+// runTwoTier (--resident) runs pure-logic suites file-side and integration
+// suites via the resident harness, then reconciles by provenance (spec §9.1-Q6):
+// one verdict per suite, exit = union.
+func runTwoTier(ctx context.Context, eng engine.Engine, suites []mtest.TestSuite) ([]suiteResult, error) {
+	var pureLogic, integration []mtest.TestSuite
+	for _, s := range suites {
+		if s.Tier == mtest.TierIntegration {
+			integration = append(integration, s)
+		} else {
+			pureLogic = append(pureLogic, s)
+		}
+	}
+	fileResults, err := mtest.Run(ctx, eng, pureLogic)
+	if err != nil {
+		return nil, clikit.Fail(clikit.ExitRuntime, "ENGINE_RUN", err.Error(),
+			"m test runs on a live engine — is ydb/iris installed and reachable?")
+	}
+	resResults, err := harness.RunResident(ctx, eng, integration)
+	if err != nil {
+		return nil, clikit.Fail(clikit.ExitRuntime, "RESIDENT_RUN", err.Error(),
+			"the resident harness needs RUN^STDHARN staged — add --routines <m-stdlib/src>")
+	}
+	merged := harness.Reconcile(fileResults, resResults)
+	rows := make([]suiteResult, 0, len(merged.Results))
+	for _, p := range merged.Results {
+		rows = append(rows, toRow(p.Result, p.Tier))
+	}
+	return rows, nil
+}
+
+func toRow(r mtest.RunResult, tier string) suiteResult {
+	return suiteResult{
+		Suite: r.Suite, Tier: tier,
+		Passed: r.Summary.Passed, Failed: r.Summary.Failed, Total: r.Summary.Total, OK: r.OK,
+	}
 }
 
 // --- coverage ----------------------------------------------------------------

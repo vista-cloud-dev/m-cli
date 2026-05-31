@@ -42,6 +42,22 @@ func TestDetectProtocol(t *testing.T) {
 	}
 }
 
+func TestDetectTier(t *testing.T) {
+	cases := map[string]string{
+		"FOOTST\t; suite\n\t;; tier: integration\n":   mtest.TierIntegration,
+		"FOOTST\t; suite\n\t; tier: integration\n":    mtest.TierIntegration,
+		"FOOTST\t;; tier:integration\n":               mtest.TierIntegration,
+		"FOOTST\t;; tier: pure-logic\n":               mtest.TierPureLogic,
+		"FOOTST\t; an ordinary suite, no directive\n": mtest.TierPureLogic,   // untagged ⇒ safe default
+		"FOOTST\t;; TIER: Integration\n":              mtest.TierIntegration, // case-insensitive
+	}
+	for src, want := range cases {
+		if got := mtest.DetectTier([]byte(src)); got != want {
+			t.Errorf("DetectTier(%q) = %q, want %q", src, got, want)
+		}
+	}
+}
+
 func TestFindCases(t *testing.T) {
 	src, err := os.ReadFile("testdata/SAMPLETST.m")
 	if err != nil {
