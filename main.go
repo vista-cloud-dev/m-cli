@@ -51,6 +51,7 @@ type CLI struct {
 	Test     testCmd     `cmd:"" help:"Run *TST.m suites through the engine (^STDASSERT)."`
 	Coverage coverageCmd `cmd:"" help:"Line coverage over the engine (YDB view \"TRACE\" → LCOV)."`
 	Watch    watchCmd    `cmd:"" help:"Re-run lint/fmt (and, with --run, tests) on M files as they change."`
+	Vista    vistaCmd    `cmd:"" help:"Reach a live VistA via its m-<engine> driver (status / exec) — the driver-backed engine transport."`
 
 	// Dispatched namespaces (spec §2.2): each forwards to a sibling binary.
 	// irissync owns the IRIS source axis; kids-vc owns the KIDS round-trip.
