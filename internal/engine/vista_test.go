@@ -5,11 +5,10 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/vista-cloud-dev/m-cli/internal/driver"
 	mdriver "github.com/vista-cloud-dev/m-driver-sdk"
 )
 
-// vistaWith builds a VistaEngine over a driver.Client whose subprocess runner is
+// vistaWith builds a VistaEngine over an mdriver.Client whose subprocess runner is
 // faked: it returns the canned envelope for whatever verb is invoked.
 func vistaWith(t *testing.T, kind Kind, command string, ok bool, exit int, data any, eng *mdriver.EngineError, toStderr bool) *VistaEngine {
 	t.Helper()
@@ -25,11 +24,11 @@ func vistaWith(t *testing.T, kind Kind, command string, ok bool, exit int, data 
 		}
 		return b, nil, exit, nil
 	}
-	cl := driver.NewClient("m-"+string(kind), string(kind), "remote", nil, run)
+	cl := mdriver.NewClient("m-"+string(kind), string(kind), "remote", nil, run)
 	return NewVista(kind, cl)
 }
 
-func TestVista_SatisfiesEngine(t *testing.T) {
+func TestVista_SatisfiesEngine(_ *testing.T) {
 	var _ Engine = (*VistaEngine)(nil)
 }
 

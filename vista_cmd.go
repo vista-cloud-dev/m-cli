@@ -6,8 +6,8 @@ import (
 	"strings"
 
 	"github.com/vista-cloud-dev/m-cli/clikit"
-	"github.com/vista-cloud-dev/m-cli/internal/driver"
 	"github.com/vista-cloud-dev/m-cli/internal/engine"
+	mdriver "github.com/vista-cloud-dev/m-driver-sdk"
 )
 
 // vistaCmd is the driver-backed engine surface: it reaches a live VistA (or any
@@ -31,11 +31,11 @@ type vistaConn struct {
 // build resolves the driver binary (driver-contract §4) and returns the
 // driver-backed engine.
 func (v vistaConn) build() (*engine.VistaEngine, error) {
-	bin, err := driver.Locate(v.Engine, driver.DefaultLocateDeps())
+	bin, err := mdriver.Locate(v.Engine, mdriver.DefaultLocateDeps())
 	if err != nil {
 		return nil, err
 	}
-	cl := driver.NewClient(bin, v.Engine, v.Transport, nil, nil)
+	cl := mdriver.NewClient(bin, v.Engine, v.Transport, nil, nil)
 	return engine.NewVista(engine.Kind(v.Engine), cl), nil
 }
 

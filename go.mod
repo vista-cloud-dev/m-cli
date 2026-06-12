@@ -6,7 +6,7 @@ require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/alecthomas/kong v1.15.0
 	github.com/charmbracelet/lipgloss v1.1.0
-	github.com/vista-cloud-dev/m-driver-sdk v0.2.0
+	github.com/vista-cloud-dev/m-driver-sdk v0.3.0
 	github.com/vista-cloud-dev/m-parse v0.0.0-20260529163350-9509c68573db
 	github.com/willabides/kongplete v0.4.0
 	golang.org/x/term v0.43.0
