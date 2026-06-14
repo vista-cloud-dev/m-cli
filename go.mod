@@ -9,7 +9,7 @@ require (
 	github.com/vista-cloud-dev/m-driver-sdk v0.3.0
 	github.com/vista-cloud-dev/m-parse v0.0.0-20260529163350-9509c68573db
 	github.com/willabides/kongplete v0.4.0
-	golang.org/x/term v0.43.0
+	golang.org/x/term v0.44.0
 )
 
 require (
@@ -29,5 +29,5 @@ require (
 	github.com/riywo/loginshell v0.0.0-20200815045211-7d26008be1ab // indirect
 	github.com/tetratelabs/wazero v1.11.0 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
-	golang.org/x/sys v0.44.0 // indirect
+	golang.org/x/sys v0.46.0 // indirect
 )
