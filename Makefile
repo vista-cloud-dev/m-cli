@@ -16,12 +16,17 @@ export CGO_ENABLED := 0
 
 PLATFORMS := linux/amd64 linux/arm64 darwin/arm64 windows/amd64
 
-.PHONY: all build run lint test tidy schema dist clean
+.PHONY: all build run lint test tidy schema dist clean arch
 
-all: lint test build
+all: lint test build arch
 
 build:
 	go build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o dist/$(BIN) .
+
+# m/v waterline G1 gate (dependency-direction). This repo is layer m
+# (repo.meta.json); the gate fails the build on any m → v dependency.
+arch: build
+	./dist/$(BIN) arch check .
 
 run: build
 	./dist/$(BIN) $(ARGS)

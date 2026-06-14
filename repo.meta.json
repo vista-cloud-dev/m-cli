@@ -1,0 +1,9 @@
+{
+  "id": "tool:m-cli",
+  "repo": "https://github.com/vista-cloud-dev/m-cli",
+  "role": "Cross-engine M toolchain — the `m` busybox (fmt/lint/lsp/test/coverage/watch/vista/arch)",
+  "language": ["go"],
+  "layer": "m",
+  "license": "AGPL-3.0",
+  "verification_commands": ["make lint", "make test", "make build", "./dist/m arch check ."]
+}

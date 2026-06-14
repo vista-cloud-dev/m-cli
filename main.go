@@ -28,6 +28,7 @@ import (
 	"github.com/willabides/kongplete"
 
 	"github.com/vista-cloud-dev/m-cli/clikit"
+	"github.com/vista-cloud-dev/m-cli/internal/arch"
 	"github.com/vista-cloud-dev/m-cli/internal/config"
 	"github.com/vista-cloud-dev/m-cli/internal/dispatch"
 	"github.com/vista-cloud-dev/m-cli/internal/engine"
@@ -52,6 +53,7 @@ type CLI struct {
 	Coverage coverageCmd `cmd:"" help:"Line coverage over the engine (YDB view \"TRACE\" → LCOV)."`
 	Watch    watchCmd    `cmd:"" help:"Re-run lint/fmt (and, with --run, tests) on M files as they change."`
 	Vista    vistaCmd    `cmd:"" help:"Reach a live VistA via its m-<engine> driver (status / exec) — the driver-backed engine transport."`
+	Arch     archCmd     `cmd:"" help:"Check the m/v waterline — engine-neutral vs VistA-specific layer boundary."`
 
 	// Dispatched namespaces (spec §2.2): each forwards to a sibling binary.
 	// irissync owns the IRIS source axis; kids-vc owns the KIDS round-trip.
@@ -956,6 +958,71 @@ func (lspCmd) Run(_ *clikit.Context) error {
 	defer srv.Close()
 	if err := srv.Serve(); err != nil {
 		return clikit.Fail(clikit.ExitRuntime, "LSP", err.Error(), "")
+	}
+	return nil
+}
+
+// --- arch (the m/v waterline gate) -------------------------------------------
+//
+// G1 — dependency-direction: dependency flows one way, v → m, never the
+// reverse (docs/background/m-v-waterline-adr.md). The repo declares its layer
+// in a committed meta artifact; `m arch check` asserts an m-layer repo's Go
+// dependency closure carries no vista-cloud-dev/v-* module and its M source
+// references no VSL* (v-layer) routine. A v-layer repo passes trivially.
+
+type archCmd struct {
+	Check archCheckCmd `cmd:"" help:"Run the G1 dependency-direction gate for this repo."`
+}
+
+type archCheckCmd struct {
+	Root  string `arg:"" optional:"" type:"path" help:"Repo root to check (default: .)."`
+	Layer string `help:"Override the declared layer (m|v); else read from dist/repo.meta.json or dist/v-contract.json."`
+}
+
+func (c *archCheckCmd) Run(cc *clikit.Context) error {
+	root := c.Root
+	if root == "" {
+		root = "."
+	}
+	rep, err := arch.Check(root, c.Layer)
+	if err != nil {
+		return clikit.Fail(clikit.ExitUsage, "ARCH_LAYER", err.Error(),
+			`declare "layer": "m"|"v" in the repo meta, or pass --layer`)
+	}
+
+	if err := cc.Result(rep, func() {
+		cc.Title("arch check")
+		var checks []string
+		if rep.CheckedGo {
+			checks = append(checks, "go-deps")
+		}
+		if rep.CheckedM {
+			checks = append(checks, "m-source")
+		}
+		if len(checks) == 0 {
+			checks = append(checks, "none (v-layer)")
+		}
+		cc.KV(
+			[2]string{"layer", cc.Accent(string(rep.Layer))},
+			[2]string{"gate", "G1 dependency-direction"},
+			[2]string{"checked", strings.Join(checks, ", ")},
+			[2]string{"violations", fmt.Sprintf("%d", len(rep.Violations))},
+		)
+		for _, v := range rep.Violations {
+			fmt.Fprintf(cc.Stdout, "  %s %s  %s  %s\n",
+				cc.Severity("error"), cc.Accent(v.Gate), v.Source, cc.Faint(v.Detail))
+		}
+		if len(rep.Violations) == 0 {
+			fmt.Fprintln(cc.Stdout, cc.Success("waterline clean — no m → v dependency"))
+		}
+	}); err != nil {
+		return err
+	}
+
+	if len(rep.Violations) > 0 {
+		return clikit.Fail(clikit.ExitCheck, "WATERLINE_VIOLATION",
+			fmt.Sprintf("%d m → v dependency violation(s)", len(rep.Violations)),
+			"the m layer must not depend on the v layer (v → m only)")
 	}
 	return nil
 }
