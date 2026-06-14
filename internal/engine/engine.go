@@ -60,6 +60,25 @@ type Options struct {
 	IrisBin   string // default "iris"
 	Instance  string // IRIS instance name (default "IRIS")
 	Namespace string // IRIS namespace (default "USER")
+	// Chset selects the engine charset: "m" (byte mode — one char == one byte,
+	// required by binary suites like STDCSPRNG/STDB64/STDHEX) or "utf-8". Empty
+	// means "engine default" (YDB inherits its ambient $ydb_chset). On YDB this
+	// exports ydb_chset; on IRIS it is a no-op (byte semantics are inherent —
+	// see IrisEngine).
+	Chset string
+}
+
+// ydbChset maps the user-facing --chset token to YottaDB's $ydb_chset value.
+// Unknown/empty tokens yield "" (leave the engine default untouched).
+func ydbChset(tok string) string {
+	switch tok {
+	case "m":
+		return "M"
+	case "utf-8", "utf8", "UTF-8":
+		return "UTF-8"
+	default:
+		return ""
+	}
 }
 
 // New builds the Engine for kind with opts (zero values defaulted).
@@ -68,6 +87,8 @@ func New(kind Kind, opts Options) Engine {
 		opts.Runner = LocalRunner
 	}
 	if kind == IRIS {
+		// opts.Chset intentionally ignored: byte mode is inherent on IRIS
+		// (see IrisEngine doc). Accepting the option keeps the CLI uniform.
 		return &IrisEngine{
 			bin:       orDefault(opts.IrisBin, "iris"),
 			instance:  orDefault(opts.Instance, "IRIS"),
@@ -75,7 +96,7 @@ func New(kind Kind, opts Options) Engine {
 			run:       opts.Runner,
 		}
 	}
-	return &YdbEngine{bin: orDefault(opts.YdbBin, "ydb"), run: opts.Runner}
+	return &YdbEngine{bin: orDefault(opts.YdbBin, "ydb"), run: opts.Runner, chset: ydbChset(opts.Chset)}
 }
 
 func orDefault(s, def string) string {

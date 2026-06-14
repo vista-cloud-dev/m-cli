@@ -417,6 +417,7 @@ type testCmd struct {
 	Routines  []string `help:"Extra source dirs to stage (e.g. m-stdlib/src for ^STDASSERT). Repeatable."`
 	Namespace string   `help:"IRIS namespace (default USER)."`
 	Resident  bool     `help:"Run ';; tier: integration' suites via the resident harness (RUN^STDHARN) and reconcile with file-side pure-logic suites (spec §9)."`
+	Chset     string   `default:"" enum:",m,utf-8" help:"Engine charset: m (byte mode) or utf-8. Default: engine default (YDB inherits its ambient ydb_chset). Byte suites (STDCSPRNG/STDB64/STDHEX) need m on YDB; inherent on IRIS."`
 }
 
 type suiteResult struct {
@@ -484,7 +485,7 @@ func (c *testCmd) Run(cc *clikit.Context) error {
 			}
 			if kind == engine.IRIS {
 				stageDir := fmt.Sprintf("/tmp/m-test-%d", time.Now().UnixNano())
-				eng = engine.New(kind, engine.Options{Runner: engine.DockerRunner(c.Docker, ""), Namespace: c.Namespace})
+				eng = engine.New(kind, engine.Options{Runner: engine.DockerRunner(c.Docker, ""), Namespace: c.Namespace, Chset: c.Chset})
 				if err := engine.IrisStageLoad(ctx, eng, c.Docker, stageDir, files); err != nil {
 					return clikit.Fail(clikit.ExitRuntime, "STAGE_FAILED", err.Error(), "")
 				}
@@ -495,10 +496,10 @@ func (c *testCmd) Run(cc *clikit.Context) error {
 					return clikit.Fail(clikit.ExitRuntime, "STAGE_FAILED", err.Error(), "")
 				}
 				defer engine.DockerUnstage(ctx, c.Docker, stageDir)
-				eng = engine.New(kind, engine.Options{Runner: engine.DockerRunner(c.Docker, stageDir)})
+				eng = engine.New(kind, engine.Options{Runner: engine.DockerRunner(c.Docker, stageDir), Chset: c.Chset})
 			}
 		} else {
-			eng = engine.New(kind, engine.Options{Namespace: c.Namespace})
+			eng = engine.New(kind, engine.Options{Namespace: c.Namespace, Chset: c.Chset})
 		}
 		var rows []suiteResult
 		if c.Resident {
@@ -613,6 +614,7 @@ type coverageCmd struct {
 	Namespace  string   `help:"IRIS namespace (default USER)."`
 	MinPercent float64  `name:"min-percent" help:"Fail (exit 3) if line coverage is below this percent."`
 	Lcov       string   `help:"Write an LCOV tracefile to this path."`
+	Chset      string   `default:"" enum:",m,utf-8" help:"Engine charset: m (byte mode) or utf-8. Default: engine default (YDB inherits its ambient ydb_chset). Byte suites (STDCSPRNG/STDB64/STDHEX) need m on YDB; inherent on IRIS."`
 }
 
 type fileCov struct {
@@ -673,7 +675,7 @@ func (c *coverageCmd) Run(cc *clikit.Context) error {
 		}
 		if kind == engine.IRIS {
 			stageDir := fmt.Sprintf("/tmp/m-cov-%d", time.Now().UnixNano())
-			eng = engine.New(kind, engine.Options{Runner: engine.DockerRunner(c.Docker, ""), Namespace: c.Namespace})
+			eng = engine.New(kind, engine.Options{Runner: engine.DockerRunner(c.Docker, ""), Namespace: c.Namespace, Chset: c.Chset})
 			if err := engine.IrisStageLoad(ctx, eng, c.Docker, stageDir, files); err != nil {
 				return clikit.Fail(clikit.ExitRuntime, "STAGE_FAILED", err.Error(), "")
 			}
@@ -684,10 +686,10 @@ func (c *coverageCmd) Run(cc *clikit.Context) error {
 				return clikit.Fail(clikit.ExitRuntime, "STAGE_FAILED", err.Error(), "")
 			}
 			defer engine.DockerUnstage(ctx, c.Docker, stageDir)
-			eng = engine.New(kind, engine.Options{Runner: engine.DockerRunner(c.Docker, stageDir)})
+			eng = engine.New(kind, engine.Options{Runner: engine.DockerRunner(c.Docker, stageDir), Chset: c.Chset})
 		}
 	} else {
-		eng = engine.New(kind, engine.Options{Namespace: c.Namespace})
+		eng = engine.New(kind, engine.Options{Namespace: c.Namespace, Chset: c.Chset})
 	}
 
 	result, err := mcov.Run(ctx, p, eng, routinePaths, suiteEntries)
@@ -749,17 +751,17 @@ type stagedEngine struct {
 	cleanup func()
 }
 
-func newStagedEngine(ctx context.Context, kind engine.Kind, docker, namespace string, initialFiles []string) (*stagedEngine, error) {
+func newStagedEngine(ctx context.Context, kind engine.Kind, docker, namespace, chset string, initialFiles []string) (*stagedEngine, error) {
 	if docker == "" {
 		return &stagedEngine{
-			eng:     engine.New(kind, engine.Options{Namespace: namespace}),
+			eng:     engine.New(kind, engine.Options{Namespace: namespace, Chset: chset}),
 			restage: func([]string) error { return nil },
 			cleanup: func() {},
 		}, nil
 	}
 	if kind == engine.IRIS {
 		stageDir := fmt.Sprintf("/tmp/m-eng-%d", time.Now().UnixNano())
-		eng := engine.New(kind, engine.Options{Runner: engine.DockerRunner(docker, ""), Namespace: namespace})
+		eng := engine.New(kind, engine.Options{Runner: engine.DockerRunner(docker, ""), Namespace: namespace, Chset: chset})
 		restage := func(files []string) error { return engine.IrisStageLoad(ctx, eng, docker, stageDir, files) }
 		if err := restage(initialFiles); err != nil {
 			return nil, err
@@ -771,7 +773,7 @@ func newStagedEngine(ctx context.Context, kind engine.Kind, docker, namespace st
 		return nil, err
 	}
 	return &stagedEngine{
-		eng:     engine.New(kind, engine.Options{Runner: engine.DockerRunner(docker, stageDir)}),
+		eng:     engine.New(kind, engine.Options{Runner: engine.DockerRunner(docker, stageDir), Chset: chset}),
 		restage: func(files []string) error { return engine.DockerStage(ctx, docker, stageDir, files) },
 		cleanup: func() { engine.DockerUnstage(ctx, docker, stageDir) },
 	}, nil
@@ -793,6 +795,7 @@ type watchCmd struct {
 	Docker    string   `help:"Run --run suites inside this container via docker exec."`
 	Routines  []string `help:"Extra source dirs to stage for --run (e.g. m-stdlib/src). Repeatable."`
 	Namespace string   `help:"IRIS namespace for --run (default USER)."`
+	Chset     string   `default:"" enum:",m,utf-8" help:"Engine charset for --run: m (byte mode) or utf-8. Default: engine default. Byte suites need m on YDB; inherent on IRIS."`
 }
 
 func (c *watchCmd) Run(cc *clikit.Context) error {
@@ -850,7 +853,7 @@ func (c *watchCmd) Run(cc *clikit.Context) error {
 			ms, _ := filepath.Glob(filepath.Join(rdir, "*.m"))
 			files = append(files, ms...)
 		}
-		staged, err = newStagedEngine(ctx, kind, c.Docker, c.Namespace, files)
+		staged, err = newStagedEngine(ctx, kind, c.Docker, c.Namespace, c.Chset, files)
 		if err != nil {
 			return clikit.Fail(clikit.ExitRuntime, "STAGE_FAILED", err.Error(), "")
 		}
