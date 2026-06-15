@@ -1027,14 +1027,15 @@ func (lspCmd) Run(_ *clikit.Context) error {
 // --- arch (the m/v waterline gates) ------------------------------------------
 //
 // The m/v waterline (docs/background/m-v-waterline-adr.md). The repo declares
-// its layer in a committed meta artifact; `m arch check` runs, for an m-layer
-// repo: G1 dependency-direction (Go closure carries no vista-cloud-dev/v-*
-// module; M source references no VSL* routine) and G2 forbidden-symbol (M code
-// references no VistA-only symbol — FileMan/Kernel/KIDS). A v-layer repo passes
-// trivially (v → m, and VistA above the line, are allowed).
+// its layer in a committed meta artifact; `m arch check` runs G1 dependency-
+// direction (Go closure carries no vista-cloud-dev/v-* module; M source
+// references no VSL* routine) and G2 forbidden-symbol (M code references no
+// VistA-only symbol) for an m-layer repo, plus G3 transport-monopoly (only
+// m-driver-sdk names a driver binary) and G4 seam-pin (go.mod pins a tagged
+// m-driver-sdk, no replace) for every repo.
 
 type archCmd struct {
-	Check archCheckCmd `cmd:"" help:"Run the m/v waterline gates (G1 dependency-direction, G2 forbidden-symbol) for this repo."`
+	Check archCheckCmd `cmd:"" help:"Run the m/v waterline gates (G1 dependency-direction, G2 forbidden-symbol, G3 transport-monopoly, G4 seam-pin) for this repo."`
 }
 
 type archCheckCmd struct {
@@ -1062,12 +1063,15 @@ func (c *archCheckCmd) Run(cc *clikit.Context) error {
 		if rep.CheckedM {
 			checks = append(checks, "m-source")
 		}
-		if len(checks) == 0 {
-			checks = append(checks, "none (v-layer)")
+		if rep.CheckedG3 {
+			checks = append(checks, "driver-refs")
+		}
+		if rep.CheckedG4 {
+			checks = append(checks, "seam-pin")
 		}
 		cc.KV(
 			[2]string{"layer", cc.Accent(string(rep.Layer))},
-			[2]string{"gates", "G1 dependency-direction, G2 forbidden-symbol"},
+			[2]string{"gates", "G1 dependency-direction · G2 forbidden-symbol · G3 transport-monopoly · G4 seam-pin"},
 			[2]string{"checked", strings.Join(checks, ", ")},
 			[2]string{"violations", fmt.Sprintf("%d", len(rep.Violations))},
 		)

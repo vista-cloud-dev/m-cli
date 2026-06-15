@@ -338,6 +338,164 @@ func TestCheckVLayerSkipsVistaSymbols(t *testing.T) {
 	}
 }
 
+// --- G3: CheckDriverMonopoly (transport monopoly) ---------------------------
+
+func TestCheckDriverMonopolyFlagsForeignDriver(t *testing.T) {
+	dir := t.TempDir()
+	// A consumer must not name a driver binary — it reaches the engine via
+	// mdriver.Client (engine name "ydb"/"iris", never the binary).
+	writeFile(t, filepath.Join(dir, "internal", "x.go"),
+		"package x\nimport \"os/exec\"\nfunc r() { _ = exec.Command(\"m-ydb\", \"meta\") }\n")
+	vs, err := CheckDriverMonopoly(dir, "m-cli")
+	if err != nil {
+		t.Fatalf("CheckDriverMonopoly: %v", err)
+	}
+	if len(vs) != 1 || vs[0].Gate != "G3" || vs[0].Kind != "driver-ref" {
+		t.Fatalf("expected 1 G3 driver-ref, got %v", vs)
+	}
+}
+
+func TestCheckDriverMonopolyAllowsNameWithoutExec(t *testing.T) {
+	dir := t.TempDir()
+	// Naming a driver binary without exec'ing it is fine — this is what makes
+	// the gate self-hosting (its own deny-list var names both binaries).
+	writeFile(t, filepath.Join(dir, "x.go"),
+		"package x\nvar driverBinaries = []string{\"m-ydb\", \"m-iris\"}\n")
+	vs, err := CheckDriverMonopoly(dir, "m-cli")
+	if err != nil {
+		t.Fatalf("CheckDriverMonopoly: %v", err)
+	}
+	if len(vs) != 0 {
+		t.Errorf("naming a driver without exec is allowed, got %v", vs)
+	}
+}
+
+func TestCheckDriverMonopolyAllowsSelfExec(t *testing.T) {
+	dir := t.TempDir()
+	// The m-ydb driver may exec itself.
+	writeFile(t, filepath.Join(dir, "main.go"),
+		"package main\nimport \"os/exec\"\nfunc r() { _ = exec.Command(\"m-ydb\") }\n")
+	vs, err := CheckDriverMonopoly(dir, "m-ydb")
+	if err != nil {
+		t.Fatalf("CheckDriverMonopoly: %v", err)
+	}
+	if len(vs) != 0 {
+		t.Errorf("a driver exec'ing itself is allowed, got %v", vs)
+	}
+}
+
+func TestCheckDriverMonopolyIgnoresComment(t *testing.T) {
+	dir := t.TempDir()
+	// Even an exec.Command named in a comment is not a real exec.
+	writeFile(t, filepath.Join(dir, "x.go"),
+		"package x\n// once did exec.Command(\"m-iris\", ...)\nvar y = 1\n")
+	vs, err := CheckDriverMonopoly(dir, "m-cli")
+	if err != nil {
+		t.Fatalf("CheckDriverMonopoly: %v", err)
+	}
+	if len(vs) != 0 {
+		t.Errorf("a driver exec named only in a comment is not a reference, got %v", vs)
+	}
+}
+
+// --- G4: CheckSeamPin (seam pin) --------------------------------------------
+
+func TestCheckSeamPinFlagsReplace(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "go.mod"),
+		"module example.com/c\n\ngo 1.26\n\nrequire github.com/vista-cloud-dev/m-driver-sdk v0.3.0\n\nreplace github.com/vista-cloud-dev/m-driver-sdk => ../m-driver-sdk\n")
+	vs, err := CheckSeamPin(dir)
+	if err != nil {
+		t.Fatalf("CheckSeamPin: %v", err)
+	}
+	if len(vs) != 1 || vs[0].Gate != "G4" || vs[0].Kind != "seam-replace" {
+		t.Fatalf("expected 1 G4 seam-replace, got %v", vs)
+	}
+}
+
+func TestCheckSeamPinFlagsPseudoVersion(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "go.mod"),
+		"module example.com/c\n\ngo 1.26\n\nrequire github.com/vista-cloud-dev/m-driver-sdk v0.0.0-20260101000000-abcdef123456\n")
+	vs, err := CheckSeamPin(dir)
+	if err != nil {
+		t.Fatalf("CheckSeamPin: %v", err)
+	}
+	if len(vs) != 1 || vs[0].Gate != "G4" || vs[0].Kind != "seam-untagged" {
+		t.Fatalf("expected 1 G4 seam-untagged, got %v", vs)
+	}
+}
+
+func TestCheckSeamPinCleanTagInBlock(t *testing.T) {
+	dir := t.TempDir()
+	// A tagged require inside a require ( ... ) block, no replace — clean.
+	writeFile(t, filepath.Join(dir, "go.mod"),
+		"module example.com/c\n\ngo 1.26\n\nrequire (\n\tgithub.com/alecthomas/kong v1.0.0\n\tgithub.com/vista-cloud-dev/m-driver-sdk v0.3.0\n)\n")
+	vs, err := CheckSeamPin(dir)
+	if err != nil {
+		t.Fatalf("CheckSeamPin: %v", err)
+	}
+	if len(vs) != 0 {
+		t.Errorf("a tagged require with no replace is clean, got %v", vs)
+	}
+}
+
+func TestCheckSeamPinNoSdkDep(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "go.mod"), "module example.com/c\n\ngo 1.26\n")
+	vs, err := CheckSeamPin(dir)
+	if err != nil {
+		t.Fatalf("CheckSeamPin: %v", err)
+	}
+	if len(vs) != 0 {
+		t.Errorf("a repo not depending on the SDK passes G4, got %v", vs)
+	}
+}
+
+// --- Check integration: G3/G4 are layer-agnostic ----------------------------
+
+func TestCheckVLayerRunsSeamPin(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "dist", "v-contract.json"), `{"layer":"v"}`)
+	writeFile(t, filepath.Join(dir, "go.mod"),
+		"module example.com/v\n\ngo 1.26\n\nrequire github.com/vista-cloud-dev/m-driver-sdk v0.3.0\n\nreplace github.com/vista-cloud-dev/m-driver-sdk => ../x\n")
+	rep, err := Check(dir, "")
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	var g4 int
+	for _, v := range rep.Violations {
+		if v.Gate == "G4" {
+			g4++
+		}
+	}
+	if g4 != 1 {
+		t.Errorf("a v-layer repo must still run G4 seam-pin, got %v", rep.Violations)
+	}
+}
+
+func TestCheckSdkExemptFromG3(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain not on PATH")
+	}
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "go.mod"),
+		"module github.com/vista-cloud-dev/m-driver-sdk\n\ngo 1.26\n")
+	writeFile(t, filepath.Join(dir, "dist", "repo.meta.json"), `{"layer":"m"}`)
+	// The SDK legitimately execs every driver binary.
+	writeFile(t, filepath.Join(dir, "client.go"),
+		"package mdriver\n\nimport \"os/exec\"\n\nvar _ = exec.Command(\"m-ydb\")\n")
+	rep, err := Check(dir, "")
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	for _, v := range rep.Violations {
+		if v.Gate == "G3" {
+			t.Errorf("m-driver-sdk is exempt from G3, got %v", v)
+		}
+	}
+}
+
 // --- helpers -----------------------------------------------------------------
 
 func writeFile(t *testing.T, path, body string) {

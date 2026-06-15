@@ -1,4 +1,4 @@
 # m-cli memory index
 
 - [chset byte mode](chset-byte-mode.md) — `--chset m|utf-8` on test/coverage/watch; m-stdlib byte suites need `m` on YDB
-- [arch G2 forbidden-symbol](arch-g2-forbidden-symbol.md) — `m arch check` gained **G2** (no VistA symbols below the waterline): comment-aware deny-list scan (`^DIC/DIE/DIK/DIQ`, `^DD(`, `^DPT(`, `^VA(`, `^XUS*`, `^XPD*`) of m-layer `.m` code; RE2 trailing-guard (no lookahead) avoids `^DIETST`. Shared `forEachMLine` walk. Verified all 5 m-repos clean. G3/G4 still owed.
+- [arch waterline gates G2/G3/G4](arch-g2-forbidden-symbol.md) — `m arch check` gained the full suite: **G2** (no VistA symbols below the line; comment-aware deny-list, RE2 trailing-guard avoids `^DIETST`), **G3** (transport-monopoly — flags a non-SDK repo *exec*-ing `"m-ydb"/"m-iris"`; co-occurrence with `exec.Command` makes it self-hosting), **G4** (seam-pin — go.mod text-parse flags `replace`/pseudo-version of m-driver-sdk). G1/G2 = m-layer; G3/G4 = all repos. All 8 repos clean. Item-1 meta-schema + meta-gate + m-ci.yml + tag/pin still owed.
