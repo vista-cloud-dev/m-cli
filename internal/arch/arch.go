@@ -2,12 +2,21 @@
 // boundary between the engine-neutral `m` layer and the VistA-specific `v`
 // layer (see docs/background/m-v-waterline-adr.md in the org `docs` repo).
 //
-// This stage ships G1 — dependency-direction — the core invariant: dependency
-// flows one way, v → m, never the reverse. A repo declares its layer in a
-// committed meta artifact ("layer": "m"|"v"); the gate then asserts that an
-// `m`-layer repo's Go dependency closure contains no `vista-cloud-dev/v-*`
-// module, and that its M source references no `VSL*` (v-layer) routine. A
-// `v`-layer repo passes G1 trivially (v → m is allowed).
+// It ships two gates:
+//
+//   - G1 — dependency-direction — the core invariant: dependency flows one way,
+//     v → m, never the reverse. An `m`-layer repo's Go dependency closure must
+//     contain no `vista-cloud-dev/v-*` module, and its M source must reference
+//     no `VSL*` (v-layer) routine.
+//   - G2 — forbidden-symbol (no VistA below the waterline): an `m`-layer `.m`
+//     file's code must not reference a VistA-only symbol (FileMan/Kernel/KIDS:
+//     ^DIC/^DIE/^DIK/^DIQ, ^DD(, ^DPT(, ^VA(, ^XUS*, ^XPD*). The scan is
+//     comment-aware — a symbol named only in a ';' comment (e.g. an STDMOCK doc
+//     example) is not a reference.
+//
+// A repo declares its layer in a committed meta artifact ("layer": "m"|"v"); a
+// `v`-layer repo passes both gates trivially (v → m, and VistA above the line,
+// are allowed).
 package arch
 
 import (
@@ -40,6 +49,22 @@ const vModulePrefix = "github.com/vista-cloud-dev/v-"
 // vRoutineRef matches a reference to a v-layer (VSL*) M routine in any call
 // form — ^VSLCFG, $$tag^VSLCFG, do x^VSLCFG — since all contain "^VSL".
 var vRoutineRef = regexp.MustCompile(`\^VSL[A-Z0-9]*`)
+
+// vistaSymbols is the G2 deny-list: VistA-only symbols (FileMan/Kernel/KIDS)
+// that must not appear in m-layer code. The FileMan-API patterns carry a
+// trailing-delimiter guard `(?:[^A-Za-z0-9]|$)` so a longer routine name such
+// as ^DIETST is not mistaken for ^DIE — Go's RE2 has no lookahead.
+var vistaSymbols = []struct {
+	name string
+	re   *regexp.Regexp
+}{
+	{"^DIC/^DIE/^DIK/^DIQ (FileMan API)", regexp.MustCompile(`\^DI[CEKQ](?:[^A-Za-z0-9]|$)`)},
+	{"^DD( (FileMan data dictionary)", regexp.MustCompile(`\^DD\(`)},
+	{"^DPT( (patient file)", regexp.MustCompile(`\^DPT\(`)},
+	{"^VA( (institution file)", regexp.MustCompile(`\^VA\(`)},
+	{"^XUS* (Kernel security)", regexp.MustCompile(`\^XUS[A-Za-z0-9]*`)},
+	{"^XPD* (KIDS)", regexp.MustCompile(`\^XPD[A-Za-z0-9]*`)},
+}
 
 // Violation is one G1 finding — a dependency that crosses the waterline the
 // wrong way (m → v).
@@ -156,12 +181,11 @@ func goListModules(root string) ([]string, error) {
 	return parseGoListDeps(out.Bytes())
 }
 
-// CheckMRefs scans the .m source under root for references to v-layer (VSL*)
-// routines — the M-side m → v G1 violation. Generated/vendored trees are
-// skipped (dist, vendor, .git, node_modules).
-func CheckMRefs(root string) ([]Violation, error) {
-	var vs []Violation
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+// forEachMLine walks the .m source under root and calls fn for every line.
+// Generated/vendored trees are skipped (dist, vendor, .git, node_modules).
+// rel is the path relative to root; lineNo is 1-based.
+func forEachMLine(root string, fn func(rel string, lineNo int, line string)) error {
+	return filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -184,20 +208,65 @@ func CheckMRefs(root string) ([]Violation, error) {
 			rel = path
 		}
 		for i, line := range strings.Split(string(body), "\n") {
-			if m := vRoutineRef.FindString(line); m != "" {
-				vs = append(vs, Violation{
-					Gate: "G1", Kind: "m-ref",
-					Source: fmt.Sprintf("%s:%d", rel, i+1),
-					Detail: fmt.Sprintf("m-layer routine references v-layer routine %s", m),
-				})
-			}
+			fn(rel, i+1, line)
 		}
 		return nil
 	})
-	if err != nil {
-		return nil, err
+}
+
+// codePortion returns the executable part of an M line — everything before the
+// first ';' that is not inside a double-quoted string. M comments begin with
+// ';'; a ';' inside a "..." literal (including a doubled-quote escape) is data,
+// not a comment.
+func codePortion(line string) string {
+	inStr := false
+	for i := 0; i < len(line); i++ {
+		switch line[i] {
+		case '"':
+			inStr = !inStr
+		case ';':
+			if !inStr {
+				return line[:i]
+			}
+		}
 	}
-	return vs, nil
+	return line
+}
+
+// CheckMRefs scans the .m source under root for references to v-layer (VSL*)
+// routines — the M-side m → v G1 violation.
+func CheckMRefs(root string) ([]Violation, error) {
+	var vs []Violation
+	err := forEachMLine(root, func(rel string, lineNo int, line string) {
+		if m := vRoutineRef.FindString(line); m != "" {
+			vs = append(vs, Violation{
+				Gate: "G1", Kind: "m-ref",
+				Source: fmt.Sprintf("%s:%d", rel, lineNo),
+				Detail: fmt.Sprintf("m-layer routine references v-layer routine %s", m),
+			})
+		}
+	})
+	return vs, err
+}
+
+// CheckVistaSymbols scans the code portion of the .m source under root for
+// VistA-only symbols (the G2 violation — no VistA below the waterline).
+// Comment text is ignored via codePortion.
+func CheckVistaSymbols(root string) ([]Violation, error) {
+	var vs []Violation
+	err := forEachMLine(root, func(rel string, lineNo int, line string) {
+		code := codePortion(line)
+		for _, sym := range vistaSymbols {
+			if sym.re.MatchString(code) {
+				vs = append(vs, Violation{
+					Gate: "G2", Kind: "vista-symbol",
+					Source: fmt.Sprintf("%s:%d", rel, lineNo),
+					Detail: fmt.Sprintf("m-layer source references VistA-only symbol %s", sym.name),
+				})
+			}
+		}
+	})
+	return vs, err
 }
 
 // Check resolves the repo layer and runs the applicable G1 checks. A v-layer
@@ -221,12 +290,18 @@ func Check(root, override string) (Report, error) {
 		rep.CheckedGo = true
 		rep.Violations = append(rep.Violations, vViolations(mods)...)
 	}
-	// M-side dependency-direction (STD* → VSL*).
+	// M-side dependency-direction (G1: STD* → VSL*).
 	mvs, err := CheckMRefs(root)
 	if err != nil {
 		return rep, err
 	}
 	rep.CheckedM = true
 	rep.Violations = append(rep.Violations, mvs...)
+	// M-side forbidden-symbol (G2: no VistA below the waterline).
+	sym, err := CheckVistaSymbols(root)
+	if err != nil {
+		return rep, err
+	}
+	rep.Violations = append(rep.Violations, sym...)
 	return rep, nil
 }

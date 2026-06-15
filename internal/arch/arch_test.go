@@ -228,6 +228,116 @@ func TestCheckMLayerGoArmClean(t *testing.T) {
 	}
 }
 
+// --- G2: codePortion (comment-awareness) ------------------------------------
+
+func TestCodePortion(t *testing.T) {
+	cases := map[string]string{
+		"\tdo FILE^DIE(x) ; call the filer": "\tdo FILE^DIE(x) ",
+		"\t; do FILE^DIE(x)":                "\t",
+		"\tset x=\"a;b\" ; tail":            "\tset x=\"a;b\" ",
+		// A ';' inside a (doubled-quote) string is not a comment.
+		"\tset x=\"q\"\" ; in string\"": "\tset x=\"q\"\" ; in string\"",
+		"\tquit":                        "\tquit",
+	}
+	for in, want := range cases {
+		if got := codePortion(in); got != want {
+			t.Errorf("codePortion(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// --- G2: CheckVistaSymbols (no VistA below the waterline) --------------------
+
+func TestCheckVistaSymbolsFlagsCodeRef(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "src", "STDX.m"),
+		"STDX ;\nfiler() ;\n do FILE^DIE(\"\",a,b)\n quit\n")
+	vs, err := CheckVistaSymbols(dir)
+	if err != nil {
+		t.Fatalf("CheckVistaSymbols: %v", err)
+	}
+	if len(vs) != 1 {
+		t.Fatalf("expected 1 G2 violation, got %d: %v", len(vs), vs)
+	}
+	if vs[0].Gate != "G2" || vs[0].Kind != "vista-symbol" {
+		t.Errorf("unexpected violation: %+v", vs[0])
+	}
+}
+
+func TestCheckVistaSymbolsIgnoresComment(t *testing.T) {
+	dir := t.TempDir()
+	// STDMOCK's doc examples name "EN^DIE" as a mock target — comment only.
+	writeFile(t, filepath.Join(dir, "src", "STDMOCK.m"),
+		"STDMOCK ;\n ; doc: @example do register^STDMOCK(\"EN^DIE\",\"stub\")\n quit\n")
+	vs, err := CheckVistaSymbols(dir)
+	if err != nil {
+		t.Fatalf("CheckVistaSymbols: %v", err)
+	}
+	if len(vs) != 0 {
+		t.Errorf("comment mentions must not be flagged, got %v", vs)
+	}
+}
+
+func TestCheckVistaSymbolsTrailingGuard(t *testing.T) {
+	dir := t.TempDir()
+	// ^DIETST is a test routine name, not FileMan ^DIE — must not match.
+	writeFile(t, filepath.Join(dir, "src", "STDX.m"),
+		"STDX ;\n do stub^DIETST\n quit\n")
+	vs, err := CheckVistaSymbols(dir)
+	if err != nil {
+		t.Fatalf("CheckVistaSymbols: %v", err)
+	}
+	if len(vs) != 0 {
+		t.Errorf("^DIETST must not match ^DIE, got %v", vs)
+	}
+}
+
+func TestCheckVistaSymbolsGlobals(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "src", "STDX.m"),
+		"STDX ;\n set a=^DPT(1,0)\n set b=$get(^DD(2))\n set c=^VA(200,0)\n set d=^XUSEC(\"K\",1)\n quit\n")
+	vs, err := CheckVistaSymbols(dir)
+	if err != nil {
+		t.Fatalf("CheckVistaSymbols: %v", err)
+	}
+	if len(vs) != 4 {
+		t.Errorf("expected 4 violations (DPT/DD/VA/XUSEC), got %d: %v", len(vs), vs)
+	}
+}
+
+func TestCheckMLayerFlagsVistaSymbol(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "dist", "repo.meta.json"), `{"layer":"m"}`)
+	writeFile(t, filepath.Join(dir, "src", "STDX.m"), " do FILE^DIE(\"\")\n")
+	rep, err := Check(dir, "")
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	var g2 int
+	for _, v := range rep.Violations {
+		if v.Gate == "G2" {
+			g2++
+		}
+	}
+	if g2 != 1 {
+		t.Errorf("expected 1 G2 violation in report, got %d: %v", g2, rep.Violations)
+	}
+}
+
+func TestCheckVLayerSkipsVistaSymbols(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "dist", "v-contract.json"), `{"layer":"v"}`)
+	// VistA symbols are expected above the waterline — v-layer passes.
+	writeFile(t, filepath.Join(dir, "src", "VSLX.m"), " do FILE^DIE(\"\")\n")
+	rep, err := Check(dir, "")
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if len(rep.Violations) != 0 {
+		t.Errorf("v-layer must pass G2, got %v", rep.Violations)
+	}
+}
+
 // --- helpers -----------------------------------------------------------------
 
 func writeFile(t *testing.T, path, body string) {

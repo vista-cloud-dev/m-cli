@@ -1024,16 +1024,17 @@ func (lspCmd) Run(_ *clikit.Context) error {
 	return nil
 }
 
-// --- arch (the m/v waterline gate) -------------------------------------------
+// --- arch (the m/v waterline gates) ------------------------------------------
 //
-// G1 — dependency-direction: dependency flows one way, v → m, never the
-// reverse (docs/background/m-v-waterline-adr.md). The repo declares its layer
-// in a committed meta artifact; `m arch check` asserts an m-layer repo's Go
-// dependency closure carries no vista-cloud-dev/v-* module and its M source
-// references no VSL* (v-layer) routine. A v-layer repo passes trivially.
+// The m/v waterline (docs/background/m-v-waterline-adr.md). The repo declares
+// its layer in a committed meta artifact; `m arch check` runs, for an m-layer
+// repo: G1 dependency-direction (Go closure carries no vista-cloud-dev/v-*
+// module; M source references no VSL* routine) and G2 forbidden-symbol (M code
+// references no VistA-only symbol — FileMan/Kernel/KIDS). A v-layer repo passes
+// trivially (v → m, and VistA above the line, are allowed).
 
 type archCmd struct {
-	Check archCheckCmd `cmd:"" help:"Run the G1 dependency-direction gate for this repo."`
+	Check archCheckCmd `cmd:"" help:"Run the m/v waterline gates (G1 dependency-direction, G2 forbidden-symbol) for this repo."`
 }
 
 type archCheckCmd struct {
@@ -1066,7 +1067,7 @@ func (c *archCheckCmd) Run(cc *clikit.Context) error {
 		}
 		cc.KV(
 			[2]string{"layer", cc.Accent(string(rep.Layer))},
-			[2]string{"gate", "G1 dependency-direction"},
+			[2]string{"gates", "G1 dependency-direction, G2 forbidden-symbol"},
 			[2]string{"checked", strings.Join(checks, ", ")},
 			[2]string{"violations", fmt.Sprintf("%d", len(rep.Violations))},
 		)
@@ -1075,7 +1076,7 @@ func (c *archCheckCmd) Run(cc *clikit.Context) error {
 				cc.Severity("error"), cc.Accent(v.Gate), v.Source, cc.Faint(v.Detail))
 		}
 		if len(rep.Violations) == 0 {
-			fmt.Fprintln(cc.Stdout, cc.Success("waterline clean — no m → v dependency"))
+			fmt.Fprintln(cc.Stdout, cc.Success("waterline clean"))
 		}
 	}); err != nil {
 		return err
@@ -1083,8 +1084,8 @@ func (c *archCheckCmd) Run(cc *clikit.Context) error {
 
 	if len(rep.Violations) > 0 {
 		return clikit.Fail(clikit.ExitCheck, "WATERLINE_VIOLATION",
-			fmt.Sprintf("%d m → v dependency violation(s)", len(rep.Violations)),
-			"the m layer must not depend on the v layer (v → m only)")
+			fmt.Sprintf("%d waterline violation(s)", len(rep.Violations)),
+			"the m layer must not depend on the v layer (G1) or reference VistA symbols (G2)")
 	}
 	return nil
 }
