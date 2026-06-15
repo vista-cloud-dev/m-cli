@@ -191,7 +191,8 @@ func TestCheckVLayerPassesTrivially(t *testing.T) {
 
 func TestCheckMLayerScansM(t *testing.T) {
 	dir := t.TempDir()
-	writeFile(t, filepath.Join(dir, "dist", "repo.meta.json"), `{"layer":"m"}`)
+	writeFile(t, filepath.Join(dir, "dist", "repo.meta.json"),
+		`{"id":"tool:x","layer":"m","language":["m"],"verification_commands":["m test"]}`)
 	writeFile(t, filepath.Join(dir, "src", "STDX.m"), " set x=$$cfg^VSLCFG(1)\n")
 	rep, err := Check(dir, "")
 	if err != nil {
@@ -215,7 +216,8 @@ func TestCheckMLayerGoArmClean(t *testing.T) {
 	writeFile(t, filepath.Join(dir, "go.mod"), "module example.com/clean\n\ngo 1.26\n")
 	writeFile(t, filepath.Join(dir, "main.go"),
 		"package main\n\nimport \"fmt\"\n\nfunc main() { fmt.Println(\"hi\") }\n")
-	writeFile(t, filepath.Join(dir, "dist", "repo.meta.json"), `{"layer":"m"}`)
+	writeFile(t, filepath.Join(dir, "dist", "repo.meta.json"),
+		`{"id":"tool:clean","layer":"m","language":["go"],"verification_commands":["go test ./..."]}`)
 	rep, err := Check(dir, "")
 	if err != nil {
 		t.Fatalf("Check: %v", err)
@@ -493,6 +495,111 @@ func TestCheckSdkExemptFromG3(t *testing.T) {
 		if v.Gate == "G3" {
 			t.Errorf("m-driver-sdk is exempt from G3, got %v", v)
 		}
+	}
+}
+
+// --- Item 1: meta-schema validation -----------------------------------------
+
+func TestValidateMetaClean(t *testing.T) {
+	m := Meta{ID: "tool:x", Layer: "m", Language: []string{"go"}, VerificationCommands: []string{"make test"}}
+	if p := ValidateMeta(m); len(p) != 0 {
+		t.Errorf("a complete meta has no problems, got %v", p)
+	}
+}
+
+func TestValidateMetaMissingRequired(t *testing.T) {
+	m := Meta{Layer: "m"} // missing id, language, verification_commands
+	p := ValidateMeta(m)
+	if len(p) != 3 {
+		t.Errorf("expected 3 missing-field problems, got %d: %v", len(p), p)
+	}
+}
+
+func TestValidateMetaBadLayer(t *testing.T) {
+	m := Meta{ID: "x", Layer: "z", Language: []string{"go"}, VerificationCommands: []string{"t"}}
+	p := ValidateMeta(m)
+	if len(p) != 1 || p[0].Field != "layer" {
+		t.Errorf("expected 1 layer problem, got %v", p)
+	}
+}
+
+func TestValidateMetaOptionalFieldsAllowedAbsent(t *testing.T) {
+	// consumes/exposes are optional — a meta without them is clean.
+	m := Meta{ID: "x", Layer: "v", Language: []string{"m"}, VerificationCommands: []string{"m test"}}
+	if p := ValidateMeta(m); len(p) != 0 {
+		t.Errorf("optional fields may be absent, got %v", p)
+	}
+}
+
+func TestLoadMetaPrefersRoot(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "repo.meta.json"),
+		`{"id":"root","layer":"m","language":["go"],"verification_commands":["x"]}`)
+	writeFile(t, filepath.Join(dir, "dist", "repo.meta.json"),
+		`{"id":"dist","layer":"v","language":["m"],"verification_commands":["y"]}`)
+	m, _, found, err := LoadMeta(dir)
+	if err != nil || !found {
+		t.Fatalf("LoadMeta: err=%v found=%v", err, found)
+	}
+	if m.ID != "root" {
+		t.Errorf("root repo.meta.json must win, got id=%q", m.ID)
+	}
+}
+
+func TestLoadMetaFallsToDist(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "dist", "repo.meta.json"),
+		`{"id":"dist","layer":"m","language":["m"],"verification_commands":["y"]}`)
+	m, _, found, err := LoadMeta(dir)
+	if err != nil || !found {
+		t.Fatalf("LoadMeta: err=%v found=%v", err, found)
+	}
+	if m.ID != "dist" {
+		t.Errorf("got id=%q", m.ID)
+	}
+}
+
+func TestLoadMetaAbsent(t *testing.T) {
+	dir := t.TempDir()
+	if _, _, found, err := LoadMeta(dir); err != nil || found {
+		t.Errorf("no repo.meta.json → found=false, err=nil; got found=%v err=%v", found, err)
+	}
+}
+
+func TestLoadMetaIgnoresObjectOptionalFields(t *testing.T) {
+	dir := t.TempDir()
+	// Real metas carry consumes/exposes as objects (not arrays); they must be
+	// ignored, not cause an unmarshal error (regression: v-pkg/m-stdlib metas).
+	writeFile(t, filepath.Join(dir, "repo.meta.json"),
+		`{"id":"x","layer":"v","language":["go"],"verification_commands":["t"],"exposes":{"pkg":{"verbs":[]}},"consumes":{"sdk":"v0.3.0"}}`)
+	m, _, found, err := LoadMeta(dir)
+	if err != nil || !found {
+		t.Fatalf("object-valued optional fields must be ignored: err=%v found=%v", err, found)
+	}
+	if p := ValidateMeta(m); len(p) != 0 {
+		t.Errorf("clean meta with object optional fields, got %v", p)
+	}
+}
+
+func TestCheckReportsMetaProblems(t *testing.T) {
+	dir := t.TempDir()
+	// Layer resolves (m) but the meta is missing the other required fields.
+	writeFile(t, filepath.Join(dir, "repo.meta.json"), `{"layer":"m"}`)
+	rep, err := Check(dir, "")
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if !rep.CheckedMeta {
+		t.Error("expected CheckedMeta=true")
+	}
+	var meta int
+	for _, v := range rep.Violations {
+		if v.Gate == "META" {
+			meta++
+		}
+	}
+	if meta == 0 {
+		t.Errorf("expected META problems for an incomplete meta, got %v", rep.Violations)
 	}
 }
 

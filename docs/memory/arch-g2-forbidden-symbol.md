@@ -61,7 +61,31 @@ resolution feeds the new `goModulePath(root)`.
 exec + pseudo-version + replace fixtures red (unit tests). arch 86.7% cover,
 golangci-lint + gofmt clean, m-cli self-`arch check` clean.
 
-**Still owed in Phase B:** the root-`repo.meta.json` schema validation (item 1)
-+ migrate m-stdlib/v-stdlib off `dist/` (the only two not on root meta), the
+## Item 1 — meta-schema validation (added same branch, 2026-06-15)
+
+`m arch check` now also validates the repo's meta artifact. `metaCandidates`
+(layer resolution) flipped to **root-first**: `repo.meta.json`, then
+`dist/repo.meta.json`, then `dist/v-contract.json`. New `LoadMeta(root)` reads
+the repo.meta.json-shaped artifact (root preferred, then `dist/`; **not**
+`v-contract.json` — different shape) → `(Meta, path, found, err)`. `ValidateMeta`
+requires **id, layer, language, verification_commands** (layer ∈ m|v); consumes/
+exposes optional. `Check` validates **only when a repo.meta.json is found** (a
+v-contract-only / `--layer` repo is skipped — avoids breaking the v-contract test
+fixtures and the pre-migration dist-only repos). Problems surface as
+`Gate:"META", Kind:"meta-shape"` violations; `Report.CheckedMeta`.
+
+**GOTCHA (real bug the all-8 sweep caught):** `consumes`/`exposes` in the live
+metas are **objects, not `[]string`** (e.g. v-pkg/v-cli `exposes`, m-stdlib
+`consumes`/`exposes`). Typing them as `[]string` in the `Meta` struct made
+`json.Unmarshal` hard-error on 3 repos. Fix: the `Meta` struct carries **only the
+4 required fields**; optional/descriptive fields (consumes, exposes, repo, role,
+license, …) are unknown-and-ignored. Regression test
+`TestLoadMetaIgnoresObjectOptionalFields`.
+
+**Verified:** all 8 repos clean under G1–G4 + meta. arch 87.3% cover.
+
+**Still owed in Phase B:** **migrate m-stdlib + v-stdlib off `dist/repo.meta.json`
+to root `repo.meta.json`** (the only two not on root meta — tooling is now
+root-first, so they can migrate cleanly; per-repo increments in those repos), the
 scheduled meta-gate, the reusable `m-ci.yml`, and pinning `m-cli-ref` to a tag.
 See the org docs-repo `docs/vsl-msl/vsl-implementation-tracker.md` Phase B row.

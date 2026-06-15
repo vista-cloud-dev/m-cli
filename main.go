@@ -1032,10 +1032,12 @@ func (lspCmd) Run(_ *clikit.Context) error {
 // references no VSL* routine) and G2 forbidden-symbol (M code references no
 // VistA-only symbol) for an m-layer repo, plus G3 transport-monopoly (only
 // m-driver-sdk names a driver binary) and G4 seam-pin (go.mod pins a tagged
-// m-driver-sdk, no replace) for every repo.
+// m-driver-sdk, no replace) for every repo. It also validates the repo's
+// standardized meta artifact (root repo.meta.json: id/layer/language/
+// verification_commands).
 
 type archCmd struct {
-	Check archCheckCmd `cmd:"" help:"Run the m/v waterline gates (G1 dependency-direction, G2 forbidden-symbol, G3 transport-monopoly, G4 seam-pin) for this repo."`
+	Check archCheckCmd `cmd:"" help:"Run the m/v waterline gates (G1 dependency-direction, G2 forbidden-symbol, G3 transport-monopoly, G4 seam-pin) + meta-shape validation for this repo."`
 }
 
 type archCheckCmd struct {
@@ -1069,9 +1071,12 @@ func (c *archCheckCmd) Run(cc *clikit.Context) error {
 		if rep.CheckedG4 {
 			checks = append(checks, "seam-pin")
 		}
+		if rep.CheckedMeta {
+			checks = append(checks, "meta")
+		}
 		cc.KV(
 			[2]string{"layer", cc.Accent(string(rep.Layer))},
-			[2]string{"gates", "G1 dependency-direction · G2 forbidden-symbol · G3 transport-monopoly · G4 seam-pin"},
+			[2]string{"gates", "G1 dependency-direction · G2 forbidden-symbol · G3 transport-monopoly · G4 seam-pin · meta-shape"},
 			[2]string{"checked", strings.Join(checks, ", ")},
 			[2]string{"violations", fmt.Sprintf("%d", len(rep.Violations))},
 		)
@@ -1088,8 +1093,8 @@ func (c *archCheckCmd) Run(cc *clikit.Context) error {
 
 	if len(rep.Violations) > 0 {
 		return clikit.Fail(clikit.ExitCheck, "WATERLINE_VIOLATION",
-			fmt.Sprintf("%d waterline violation(s)", len(rep.Violations)),
-			"the m layer must not depend on the v layer (G1) or reference VistA symbols (G2)")
+			fmt.Sprintf("%d gate violation(s)", len(rep.Violations)),
+			"fix the flagged waterline (G1–G4) or meta-shape findings above")
 	}
 	return nil
 }

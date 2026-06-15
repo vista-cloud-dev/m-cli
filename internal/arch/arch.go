@@ -20,10 +20,14 @@
 //   - G4 — seam-pin: a repo requiring m-driver-sdk must pin a tagged release in
 //     go.mod — no `replace` to it, no pseudo-version (untagged commit).
 //
-// G1 and G2 apply to the m layer; G3 and G4 are layer-agnostic (a v consumer
-// also must not hand-roll transport and must seam-pin). A repo declares its
-// layer in a committed meta artifact ("layer": "m"|"v"); a `v`-layer repo passes
-// G1/G2 trivially.
+// It also validates the repo's standardized meta artifact (Phase B item 1):
+// root repo.meta.json (preferred, then dist/repo.meta.json) must carry id,
+// layer, language, and verification_commands; layer must be "m" or "v".
+//
+// G1 and G2 apply to the m layer; G3, G4, and meta-validation are layer-agnostic
+// (a v consumer also must not hand-roll transport and must seam-pin). A repo
+// declares its layer in a committed meta artifact ("layer": "m"|"v"); a `v`-layer
+// repo passes G1/G2 trivially.
 package arch
 
 import (
@@ -88,31 +92,59 @@ var vistaSymbols = []struct {
 	{"^XPD* (KIDS)", regexp.MustCompile(`\^XPD[A-Za-z0-9]*`)},
 }
 
-// Violation is one G1 finding — a dependency that crosses the waterline the
-// wrong way (m → v).
+// Violation is one gate finding — a waterline breach (G1–G4) or a meta-shape
+// problem (META).
 type Violation struct {
-	Gate   string `json:"gate"`   // "G1"
-	Kind   string `json:"kind"`   // "go-dep" | "m-ref"
+	Gate   string `json:"gate"`   // "G1" | "G2" | "G3" | "G4" | "META"
+	Kind   string `json:"kind"`   // "go-dep" | "m-ref" | "vista-symbol" | "driver-ref" | "seam-replace" | "seam-untagged" | "meta-shape"
 	Source string `json:"source"` // offending module path or file:line
 	Detail string `json:"detail"` // human-readable explanation
 }
 
 // Report is the full waterline-gate result for one repo.
 type Report struct {
-	Layer      Layer       `json:"layer"`
-	CheckedGo  bool        `json:"checkedGo"` // G1 Go dependency closure
-	CheckedM   bool        `json:"checkedM"`  // G1 m-ref + G2 forbidden-symbol
-	CheckedG3  bool        `json:"checkedG3"` // G3 transport-monopoly (driver refs)
-	CheckedG4  bool        `json:"checkedG4"` // G4 seam-pin (go.mod)
-	Violations []Violation `json:"violations"`
+	Layer       Layer       `json:"layer"`
+	CheckedGo   bool        `json:"checkedGo"`   // G1 Go dependency closure
+	CheckedM    bool        `json:"checkedM"`    // G1 m-ref + G2 forbidden-symbol
+	CheckedG3   bool        `json:"checkedG3"`   // G3 transport-monopoly (driver refs)
+	CheckedG4   bool        `json:"checkedG4"`   // G4 seam-pin (go.mod)
+	CheckedMeta bool        `json:"checkedMeta"` // meta-artifact shape
+	Violations  []Violation `json:"violations"`
+}
+
+// Meta is the standardized repo meta artifact (the schema item 1 validates).
+// Required: id, layer, language, verification_commands. Optional fields
+// (consumes, exposes — repo-defined object shapes) and descriptive fields
+// (repo, role, license, …) are allowed and ignored here.
+type Meta struct {
+	ID                   string   `json:"id"`
+	Layer                string   `json:"layer"`
+	Language             []string `json:"language"`
+	VerificationCommands []string `json:"verification_commands"`
+}
+
+// MetaProblem is one meta-shape finding (a missing or malformed field).
+type MetaProblem struct {
+	Field  string `json:"field"`
+	Detail string `json:"detail"`
 }
 
 // metaCandidates are the committed meta artifacts, in priority order, that may
-// carry the repo's "layer" declaration (ADR §3.1).
+// carry the repo's "layer" declaration (ADR §3.1). Root repo.meta.json is the
+// standard location and is read first; the dist/ forms are read for back-compat
+// while repos migrate to root (Phase B item 1).
 var metaCandidates = []string{
+	"repo.meta.json",
 	filepath.Join("dist", "repo.meta.json"),
 	filepath.Join("dist", "v-contract.json"),
-	"repo.meta.json", // repos whose dist/ is gitignored (e.g. m-cli)
+}
+
+// metaFileCandidates are the repo.meta.json-shaped artifacts (root preferred,
+// then dist/) that LoadMeta validates. v-contract.json is a differently-shaped
+// per-domain artifact and is not validated here.
+var metaFileCandidates = []string{
+	"repo.meta.json",
+	filepath.Join("dist", "repo.meta.json"),
 }
 
 // ResolveLayer determines the repo's declared layer. An explicit override
@@ -148,7 +180,48 @@ func ResolveLayer(root, override string) (Layer, error) {
 			return "", fmt.Errorf(`%s: invalid "layer" %q (want m or v)`, rel, meta.Layer)
 		}
 	}
-	return "", fmt.Errorf(`no "layer" declared — add it to dist/repo.meta.json or dist/v-contract.json, or pass --layer`)
+	return "", fmt.Errorf(`no "layer" declared — add it to repo.meta.json (root, preferred), dist/repo.meta.json, or dist/v-contract.json, or pass --layer`)
+}
+
+// LoadMeta reads the repo's standardized meta artifact — root repo.meta.json
+// preferred, then dist/repo.meta.json. found is false when neither exists (a
+// repo that declares its layer only via dist/v-contract.json, or via --layer).
+// A malformed JSON meta returns an error.
+func LoadMeta(root string) (meta Meta, path string, found bool, err error) {
+	for _, rel := range metaFileCandidates {
+		body, readErr := os.ReadFile(filepath.Join(root, rel))
+		if readErr != nil {
+			continue
+		}
+		if err := json.Unmarshal(body, &meta); err != nil {
+			return Meta{}, rel, true, fmt.Errorf("%s: %w", rel, err)
+		}
+		return meta, rel, true, nil
+	}
+	return Meta{}, "", false, nil
+}
+
+// ValidateMeta checks the meta against the standardized schema (Phase B item 1):
+// id, layer, language, and verification_commands are required; layer must be
+// "m" or "v"; consumes and exposes are optional. Returns one MetaProblem per
+// violation (empty when clean).
+func ValidateMeta(meta Meta) []MetaProblem {
+	var ps []MetaProblem
+	if strings.TrimSpace(meta.ID) == "" {
+		ps = append(ps, MetaProblem{Field: "id", Detail: `required field "id" is missing or empty`})
+	}
+	switch Layer(meta.Layer) {
+	case LayerM, LayerV:
+	default:
+		ps = append(ps, MetaProblem{Field: "layer", Detail: fmt.Sprintf(`"layer" must be "m" or "v" (got %q)`, meta.Layer)})
+	}
+	if len(meta.Language) == 0 {
+		ps = append(ps, MetaProblem{Field: "language", Detail: `required field "language" is missing or empty`})
+	}
+	if len(meta.VerificationCommands) == 0 {
+		ps = append(ps, MetaProblem{Field: "verification_commands", Detail: `required field "verification_commands" is missing or empty`})
+	}
+	return ps
 }
 
 // parseGoListDeps extracts the distinct module import paths from the streamed
@@ -444,6 +517,23 @@ func Check(root, override string) (Report, error) {
 	}
 	rep := Report{Layer: layer}
 	selfMod, hasMod := goModulePath(root)
+
+	// Meta-artifact shape (Phase B item 1). Validate when a repo.meta.json is
+	// present (root preferred, then dist/); a malformed meta is a hard error.
+	// A repo declaring its layer only via dist/v-contract.json or --layer has no
+	// repo.meta.json to validate and is skipped.
+	if meta, metaPath, found, mErr := LoadMeta(root); mErr != nil {
+		return rep, mErr
+	} else if found {
+		rep.CheckedMeta = true
+		for _, p := range ValidateMeta(meta) {
+			rep.Violations = append(rep.Violations, Violation{
+				Gate: "META", Kind: "meta-shape",
+				Source: fmt.Sprintf("%s:%s", metaPath, p.Field),
+				Detail: p.Detail,
+			})
+		}
+	}
 
 	// G1 + G2 apply to the m layer only (v → m, and VistA above the line, are
 	// allowed).
