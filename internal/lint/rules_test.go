@@ -124,6 +124,24 @@ func TestCStyleQuoteEscapeDisable(t *testing.T) {
 	}
 }
 
+// A `\"` mis-escape is wrong in every dialect, so M-MOD-038 carries both the
+// modern and vista tags and must fire under both dialect knobs (and stay out of
+// pedantic so it lives in default). Pin that intent: a refactor that drops a tag
+// would otherwise pass silently.
+func TestCStyleQuoteEscapeDialectCoverage(t *testing.T) {
+	src := "EN ;\n set x=\"name=\\\"value\"\n"
+	for _, profile := range []string{"default", "modern", "pythonic", "vista", "all"} {
+		l := newLinter(t, lint.Profile(profile))
+		fs, err := l.Lint(context.Background(), []byte(src))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := countRule(fs, "M-MOD-038"); got != 1 {
+			t.Errorf("profile %q: M-MOD-038 count = %d, want 1", profile, got)
+		}
+	}
+}
+
 // The default profile is modern minus pedantic: the metric/portability rules
 // are in; the pedantic style nitpicks (M-MOD-009, M-STY-001) are not.
 func TestDefaultProfileMembership(t *testing.T) {
