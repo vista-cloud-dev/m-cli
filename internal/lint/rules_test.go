@@ -72,6 +72,58 @@ func TestDotBlockNesting(t *testing.T) {
 	}
 }
 
+// M-MOD-038 — a C-style `\"` quote-escape inside a string literal. In M a
+// double-quote is escaped by doubling it (""), not with a backslash; `\"`
+// terminates the string and silently corrupts the routine.
+func TestCStyleQuoteEscape(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+		want int
+	}{
+		// The real v-stdlib FU-5 5B.1 repro: an assertion description with a
+		// C-style escaped quote. The string ends early at the first `\"`, which
+		// is followed by a word char (CAPI) — the mis-escape signal.
+		{"assert-desc-repro", "EN ;\n do eq^STDASSERT(.pass,.fail,x,\"y\",\"rpc name from XWB(2,\\\"CAPI\\\")\")\n", 1},
+		{"single-escaped-quote", "EN ;\n set x=\"name=\\\"value\"\n", 1},
+		// Negatives — none of these is a C-style escape.
+		{"doubled-quote", "EN ;\n set x=\"he said \"\"hi\"\"\"\n", 0},
+		{"backslash-not-before-quote", "EN ;\n set x=\"a\\b\\c\"\n", 0},
+		{"windows-path", "EN ;\n set x=\"C:\\tmp\"\n", 0},
+		// A string whose content legitimately ends in a backslash: the `"` is the
+		// real terminator (followed by EOL/delimiter), not a mistaken escape.
+		{"trailing-backslash-legit", "EN ;\n set x=\"C:\\\"\n", 0},
+		// A `\"` that appears only inside a trailing `;` comment is not in code.
+		{"escape-in-comment", "EN ;\n set x=1 ; see XWB(2,\\\"CAPI\\\")\n", 0},
+		// Integer-divide operator `\` in code (outside any string) is not flagged.
+		{"integer-divide-operator", "EN ;\n set x=7\\2\n", 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fs := lintAll(t, tc.src)
+			if got := countRule(fs, "M-MOD-038"); got != tc.want {
+				t.Errorf("M-MOD-038 count = %d, want %d\nsrc: %q\nfindings: %+v", got, tc.want, tc.src, fs)
+			}
+			if tc.want > 0 {
+				for _, f := range fs {
+					if f.Rule == "M-MOD-038" && f.Severity != lint.Error {
+						t.Errorf("M-MOD-038 severity = %q, want error", f.Severity)
+					}
+				}
+			}
+		})
+	}
+}
+
+// M-MOD-038 fires at error severity and is honored by inline disable directives
+// (the centralized suppression choke point) like every other rule.
+func TestCStyleQuoteEscapeDisable(t *testing.T) {
+	src := "EN ;\n set x=\"name=\\\"value\" ; m-lint: disable=M-MOD-038\n"
+	if got := countRule(lintAll(t, src), "M-MOD-038"); got != 0 {
+		t.Errorf("disable=M-MOD-038 should suppress; got %d findings", got)
+	}
+}
+
 // The default profile is modern minus pedantic: the metric/portability rules
 // are in; the pedantic style nitpicks (M-MOD-009, M-STY-001) are not.
 func TestDefaultProfileMembership(t *testing.T) {

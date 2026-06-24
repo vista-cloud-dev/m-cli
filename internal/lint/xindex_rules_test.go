@@ -144,12 +144,15 @@ func TestXindexCleanCounterExamples(t *testing.T) {
 	}
 }
 
-// Profile/tag membership: xindex ⊆ all; sac ⊆ xindex; vista ⊆ xindex; the
+// Profile/tag membership: xindex ⊆ all; sac ⊆ xindex; every vista rule is either
+// an xindex VistA-Kernel rule or a modern rule cross-tagged vista (a universally
+// correct check, e.g. M-MOD-038, that must fire under the vista dialect too); the
 // modernization profiles never pull xindex rules.
 func TestXindexProfileMembership(t *testing.T) {
 	xindex := ruleIDSet(lint.Profile("xindex"))
 	sac := ruleIDSet(lint.Profile("sac"))
 	vista := ruleIDSet(lint.Profile("vista"))
+	modern := ruleIDSet(lint.Profile("modern"))
 	all := ruleIDSet(lint.Profile("all"))
 	def := ruleIDSet(lint.Profile("default"))
 
@@ -167,8 +170,8 @@ func TestXindexProfileMembership(t *testing.T) {
 		}
 	}
 	for id := range vista {
-		if !xindex[id] {
-			t.Errorf("vista rule %s not in xindex", id)
+		if !xindex[id] && !modern[id] {
+			t.Errorf("vista rule %s is neither an xindex nor a modern cross-tagged rule", id)
 		}
 	}
 	// The default (modernization) profile pulls no XINDEX rules.

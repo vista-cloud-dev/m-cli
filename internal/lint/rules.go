@@ -26,6 +26,7 @@ func All() []Rule { return AllWith(DefaultOptions()) }
 // neutral rules are returned as-is.
 func AllWith(opts Options) []Rule {
 	rules := []Rule{
+		ruleCStyleQuoteEscape,                  // M-MOD-038
 		ruleByRefSubscript,                     // M-MOD-037
 		ruleLineLength(opts.Thresholds),        // M-MOD-001
 		ruleDotBlockNesting(opts.Thresholds),   // M-MOD-007
@@ -101,6 +102,94 @@ var ruleByRefSubscript = Rule{
 		return "subscripted by-reference parameter `" + string(m.Captures[0].Node.Text()) +
 			"` is rejected by YottaDB/GT.M — pass the whole local, or merge the subtree into a temp", true
 	},
+}
+
+// M-MOD-038 — a C-style `\"` quote-escape inside a string literal. In MUMPS a
+// double-quote inside a string is escaped by doubling it (`""`), never C-style
+// with a backslash. A `\"` does not escape: the `"` terminates the string and
+// the `\` is left as the string's last content char, so the rest of the line is
+// mis-parsed into barewords — a latent compile break. The failure mode is nasty
+// (the routine fails to load and `m test` reports a silent `0/0` suite abort), so
+// this is an error, and a lexical scan — not a tree query — is the dependable
+// detector precisely because the mis-escape corrupts tokenization.
+//
+// Lexical because the parse tree of the offending line is already wrong. We walk
+// each line tracking string state, skip `;` comments (only outside a string),
+// and flag a `\"` where the `\` sits inside a string and the `"` it precedes is
+// being *used as an escape* — i.e. it terminates the string (not a doubled `""`)
+// yet is immediately followed by a word char, the tell that the author meant the
+// string to continue. A string whose content legitimately ends in a backslash
+// (`"C:\"`, terminator followed by a delimiter/EOL) is left alone.
+var ruleCStyleQuoteEscape = Rule{
+	ID:       "M-MOD-038",
+	Severity: Error,
+	Category: "portability",
+	Title:    `C-style \" quote escape in a string literal`,
+	Tags:     []string{"modern", "vista"},
+	Inspect: func(_ parse.Node, src []byte) []Finding {
+		var out []Finding
+		for i, line := range strings.Split(string(src), "\n") {
+			for _, col := range cStyleQuoteEscapes(line) {
+				out = append(out, Finding{
+					Message: `C-style quote escape \" in a string literal — ` +
+						`M escapes a double-quote by doubling it ("")`,
+					Line: i + 1, Col: col + 1, EndLine: i + 1, EndCol: col + 3,
+				})
+			}
+		}
+		return out
+	},
+}
+
+// cStyleQuoteEscapes returns the 0-based byte offsets of every `\` that opens a
+// mistaken C-style `\"` escape on the line. It lexes the line as MUMPS: a string
+// runs from a `"` to the next unpaired `"` (a doubled `""` is one escaped quote
+// and stays inside the string); a `;` outside a string begins a comment.
+func cStyleQuoteEscapes(line string) []int {
+	var out []int
+	inString := false
+	for i := 0; i < len(line); i++ {
+		c := line[i]
+		if !inString {
+			switch c {
+			case ';':
+				return out // comment to end of line
+			case '"':
+				inString = true
+			}
+			continue
+		}
+		// Inside a string.
+		if c == '"' {
+			if i+1 < len(line) && line[i+1] == '"' {
+				i++ // doubled "" — escaped quote, stay in string
+				continue
+			}
+			inString = false // unpaired " — string ends here
+			continue
+		}
+		if c == '\\' && i+1 < len(line) && line[i+1] == '"' {
+			// `\` immediately before a `"`. If that `"` is itself the first of a
+			// doubled pair it is a legitimate escaped quote (the `\` is plain
+			// content) — leave it. Otherwise the `"` terminates the string: flag
+			// only when a word char follows, the signal the author meant `\"` to
+			// stay inside the string (vs. a string that genuinely ends in `\`).
+			if i+2 < len(line) && line[i+2] == '"' {
+				continue
+			}
+			if i+2 < len(line) && isWordByte(line[i+2]) {
+				out = append(out, i)
+			}
+		}
+	}
+	return out
+}
+
+// isWordByte reports whether b can continue an M name/value where a string was
+// meant to keep going — the heuristic that distinguishes a mistaken C-style
+// escape from a string that legitimately ends in a backslash.
+func isWordByte(b byte) bool {
+	return b >= 'A' && b <= 'Z' || b >= 'a' && b <= 'z' || b >= '0' && b <= '9' || b == '%'
 }
 
 // M-MOD-001 — line longer than the configured column limit.
