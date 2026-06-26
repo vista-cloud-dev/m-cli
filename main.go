@@ -27,7 +27,7 @@ import (
 	"github.com/alecthomas/kong"
 	"github.com/willabides/kongplete"
 
-	"github.com/vista-cloud-dev/m-cli/clikit"
+	"github.com/vista-cloud-dev/clikit"
 	"github.com/vista-cloud-dev/m-cli/internal/arch"
 	"github.com/vista-cloud-dev/m-cli/internal/config"
 	"github.com/vista-cloud-dev/m-cli/internal/dispatch"
@@ -47,26 +47,26 @@ import (
 type CLI struct {
 	clikit.Globals
 
-	Fmt      fmtCmd      `cmd:"" help:"Format M source over the parse tree (AST-preserving)."`
-	Lint     lintCmd     `cmd:"" help:"Lint M source over the parse tree (query-driven rules)."`
-	Lsp      lspCmd      `cmd:"" help:"Run the M language server (LSP 3.x over stdio)."`
-	Test     testCmd     `cmd:"" help:"Run *TST.m suites through the engine (^STDASSERT)."`
-	Coverage coverageCmd `cmd:"" help:"Line coverage over the engine (YDB view \"TRACE\" → LCOV)."`
-	Watch    watchCmd    `cmd:"" help:"Re-run lint/fmt (and, with --run, tests) on M files as they change."`
-	Vista    vistaCmd    `cmd:"" help:"Reach a live VistA via its m-<engine> driver (status / exec) — the driver-backed engine transport."`
-	Arch     archCmd     `cmd:"" help:"Check the m/v waterline — engine-neutral vs VistA-specific layer boundary."`
+	Fmt      fmtCmd      `cmd:"" group:"Author" help:"Format M source over the parse tree (AST-preserving)."`
+	Lint     lintCmd     `cmd:"" group:"Author" help:"Lint M source over the parse tree (query-driven rules)."`
+	Lsp      lspCmd      `cmd:"" group:"Author" help:"Run the M language server (LSP 3.x over stdio)."`
+	Test     testCmd     `cmd:"" group:"Quality" help:"Run *TST.m suites through the engine (^STDASSERT)."`
+	Coverage coverageCmd `cmd:"" group:"Quality" help:"Line coverage over the engine (YDB view \"TRACE\" → LCOV)."`
+	Watch    watchCmd    `cmd:"" group:"Author" help:"Re-run lint/fmt (and, with --run, tests) on M files as they change."`
+	Vista    vistaCmd    `cmd:"" group:"Engine" help:"Reach a live VistA via its m-<engine> driver (status / exec) — the driver-backed engine transport."`
+	Arch     archCmd     `cmd:"" group:"Quality" help:"Check the m/v waterline — engine-neutral vs VistA-specific layer boundary."`
 
 	// Dispatched namespaces (spec §2.2): each forwards to a sibling binary.
 	// irissync owns the IRIS source axis; kids-vc owns the KIDS round-trip.
-	List   listCmd   `cmd:"" help:"List server routine docnames (→ irissync list)."`
-	Pull   pullCmd   `cmd:"" help:"Materialize IRIS routine source → mirror (→ irissync pull)."`
-	Status statusCmd `cmd:"" help:"Diff server vs. local manifest (→ irissync status)."`
-	Verify verifyCmd `cmd:"" help:"Re-hash mirror vs. manifest (→ irissync verify)."`
-	Push   pushCmd   `cmd:"" help:"Write edited routines back to IRIS — the sole DB writer (→ irissync push)."`
-	Kids   kidsCmd   `cmd:"" help:"KIDS decompose/assemble/roundtrip/lint (→ kids-vc)."`
+	List   listCmd   `cmd:"" group:"Sync" help:"List server routine docnames (→ irissync list)."`
+	Pull   pullCmd   `cmd:"" group:"Sync" help:"Materialize IRIS routine source → mirror (→ irissync pull)."`
+	Status statusCmd `cmd:"" group:"Sync" help:"Diff server vs. local manifest (→ irissync status)."`
+	Verify verifyCmd `cmd:"" group:"Sync" help:"Re-hash mirror vs. manifest (→ irissync verify)."`
+	Push   pushCmd   `cmd:"" group:"Sync" help:"Write edited routines back to IRIS — the sole DB writer (→ irissync push)."`
+	Kids   kidsCmd   `cmd:"" group:"Sync" help:"KIDS decompose/assemble/roundtrip/lint (→ kids-vc)."`
 
-	Version versionCmd `cmd:"" help:"Show version, Go toolchain, and embedded grammar hash."`
-	Schema  schemaCmd  `cmd:"" help:"Emit the aggregated command/flag/enum tree as JSON (agent discovery)."`
+	Version versionCmd `cmd:"" group:"Introspect" help:"Show version, Go toolchain, and embedded grammar hash."`
+	Schema  schemaCmd  `cmd:"" group:"Introspect" help:"Emit the aggregated command/flag/enum tree as JSON (agent discovery)."`
 
 	InstallCompletions kongplete.InstallCompletions `cmd:"" help:"Install shell tab-completions."`
 }

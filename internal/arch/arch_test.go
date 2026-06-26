@@ -80,7 +80,7 @@ func TestParseGoListDeps(t *testing.T) {
 	// `go list -deps -json` emits a stream of concatenated package objects;
 	// some packages (stdlib) carry no Module.
 	stream := []byte(`{"ImportPath":"fmt"}
-{"ImportPath":"github.com/vista-cloud-dev/m-cli/clikit","Module":{"Path":"github.com/vista-cloud-dev/m-cli"}}
+{"ImportPath":"github.com/vista-cloud-dev/clikit","Module":{"Path":"github.com/vista-cloud-dev/m-cli"}}
 {"ImportPath":"github.com/vista-cloud-dev/v-pkg/pkgcli","Module":{"Path":"github.com/vista-cloud-dev/v-pkg"}}
 {"ImportPath":"github.com/vista-cloud-dev/m-cli/internal/arch","Module":{"Path":"github.com/vista-cloud-dev/m-cli"}}`)
 	mods, err := parseGoListDeps(stream)

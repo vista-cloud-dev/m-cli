@@ -8,7 +8,7 @@ import (
 
 	"github.com/alecthomas/kong"
 
-	"github.com/vista-cloud-dev/m-cli/clikit"
+	"github.com/vista-cloud-dev/clikit"
 	"github.com/vista-cloud-dev/m-cli/internal/config"
 )
 

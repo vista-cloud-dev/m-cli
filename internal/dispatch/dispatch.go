@@ -25,7 +25,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/vista-cloud-dev/m-cli/clikit"
+	"github.com/vista-cloud-dev/clikit"
 )
 
 // Spec describes one dispatched sibling namespace.

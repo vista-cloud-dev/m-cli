@@ -56,6 +56,8 @@ github.com/stretchr/testify v1.8.4 h1:CcVxjf3Q8PM0mHUKJCdn+eZZtm5yQwehR5yeSVQQcU
 github.com/stretchr/testify v1.8.4/go.mod h1:sz/lmYIOXD/1dqDmKjjqLyZ2RngseejIcXlSw2iwfAo=
 github.com/tetratelabs/wazero v1.11.0 h1:+gKemEuKCTevU4d7ZTzlsvgd1uaToIDtlQlmNbwqYhA=
 github.com/tetratelabs/wazero v1.11.0/go.mod h1:eV28rsN8Q+xwjogd7f4/Pp4xFxO7uOGbLcD/LzB1wiU=
+github.com/vista-cloud-dev/clikit v0.2.0 h1:wa26tzSRsljkSSQjgX/X/AYd849nzmn2WUPGSCv3m0g=
+github.com/vista-cloud-dev/clikit v0.2.0/go.mod h1:fRbCZNmWlE5BqmuE0qDY8EfWIuiLZ3wUlpaph1ndMiM=
 github.com/vista-cloud-dev/m-driver-sdk v0.3.0 h1:RudBmVTutjVPur0mF9sFxv7tBpCa2L78DD5GZuB8KGI=
 github.com/vista-cloud-dev/m-driver-sdk v0.3.0/go.mod h1:0Qkz38Qhgyr5nYQeqgthkMHt4zVJMN3j79Kfr+THtpw=
 github.com/vista-cloud-dev/m-parse v0.0.0-20260529163350-9509c68573db h1:e0x+stGSyYA/W2Zn13Y0E85B4vD9Y46rgV79XKzuODE=

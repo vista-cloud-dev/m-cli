@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/vista-cloud-dev/m-cli/clikit"
+	"github.com/vista-cloud-dev/clikit"
 	"github.com/vista-cloud-dev/m-cli/internal/engine"
 	mdriver "github.com/vista-cloud-dev/m-driver-sdk"
 )

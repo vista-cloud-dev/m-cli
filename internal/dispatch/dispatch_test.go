@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vista-cloud-dev/m-cli/clikit"
+	"github.com/vista-cloud-dev/clikit"
 )
 
 // fakeBin writes an executable shell script to dir/name and returns its path.
