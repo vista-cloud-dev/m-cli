@@ -37,3 +37,8 @@ when adding a brand-new dependency version; it breaks toolchain verification.
 
 **Gates:** full `go test -race ./...` green (incl. the ~5-min flow/lint engine
 suites); vet/gofmt clean; `m help` smoke-tested showing the grouped surface.
+
+**Phase 2 — `m explore` (2026-06-26).** Repinned clikit v0.2.0 → v0.3.2 and
+mounted `Explore clikit.ExploreCmd` in the root CLI struct (Introspect group) →
+`m explore` opens the interactive command palette; non-TTY falls back to full
+help. Build/vet/root-test green; smoke-tested mounting + fallback.

@@ -65,8 +65,9 @@ type CLI struct {
 	Push   pushCmd   `cmd:"" group:"Sync" help:"Write edited routines back to IRIS — the sole DB writer (→ irissync push)."`
 	Kids   kidsCmd   `cmd:"" group:"Sync" help:"KIDS decompose/assemble/roundtrip/lint (→ kids-vc)."`
 
-	Version versionCmd `cmd:"" group:"Introspect" help:"Show version, Go toolchain, and embedded grammar hash."`
-	Schema  schemaCmd  `cmd:"" group:"Introspect" help:"Emit the aggregated command/flag/enum tree as JSON (agent discovery)."`
+	Explore clikit.ExploreCmd `cmd:"" group:"Introspect" help:"Browse the command surface interactively (palette)."`
+	Version versionCmd        `cmd:"" group:"Introspect" help:"Show version, Go toolchain, and embedded grammar hash."`
+	Schema  schemaCmd         `cmd:"" group:"Introspect" help:"Emit the aggregated command/flag/enum tree as JSON (agent discovery)."`
 
 	InstallCompletions kongplete.InstallCompletions `cmd:"" help:"Install shell tab-completions."`
 }
