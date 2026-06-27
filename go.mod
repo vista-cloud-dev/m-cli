@@ -5,7 +5,7 @@ go 1.26.3
 require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/alecthomas/kong v1.15.0
-	github.com/vista-cloud-dev/clikit v0.3.3
+	github.com/vista-cloud-dev/clikit v0.4.0
 	github.com/vista-cloud-dev/m-driver-sdk v0.3.0
 	github.com/vista-cloud-dev/m-parse v0.0.0-20260529163350-9509c68573db
 	github.com/willabides/kongplete v0.4.0
