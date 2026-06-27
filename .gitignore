@@ -2,6 +2,8 @@
 /dist/
 /bin/
 *.test
+# Local root-built binary (symlinked onto PATH: ~/scripts/bin/m -> ./m)
+/m
 # coverage report artifacts (anchored / specific so they don't match source
 # files like internal/mcov/coverage.go)
 /coverage.out
