@@ -1,7 +1,7 @@
 # Docs corpus validation gate — calls the shared doc-framework reusable workflow.
 # Source of truth: vista-cloud-dev/doc-framework/.github/workflows/validate.yml
-# Gate = link/anchor integrity (docs/); frontmatter advisory. Local run:
-#   python3 ../doc-framework/tools/validate_docs.py docs/
+# Gate = link/anchor integrity (docs/). Local run:
+#   python3 ../doc-framework/tools/link-check.py docs/
 name: docs-validate
 on:
   push:
