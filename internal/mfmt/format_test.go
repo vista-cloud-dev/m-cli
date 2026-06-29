@@ -42,6 +42,38 @@ func TestIdentityIgnoresSyntaxErrors(t *testing.T) {
 	}
 }
 
+func TestCanonicalDetabsLeadingWhitespace(t *testing.T) {
+	p := mustParser(t)
+	src := []byte("EN ;\n\tset x=1\n\t\tquit\n")
+	out, err := Format(context.Background(), p, src, Rules(Canonical))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(out)
+	if strings.Contains(got, "\t") {
+		t.Errorf("leading tab survived detab:\n%q", got)
+	}
+	// Shape is preserved (whitespace stays whitespace) and content is intact.
+	for _, want := range []string{"\n SET x=1\n", "\n  QUIT\n"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in:\n%q", want, got)
+		}
+	}
+}
+
+func TestCanonicalKeepsTabInsideStringLiteral(t *testing.T) {
+	p := mustParser(t)
+	// A tab inside a quoted string is data, not indentation — must survive.
+	src := []byte("EN ;\n set x=\"a\tb\"\n")
+	out, err := Format(context.Background(), p, src, Rules(Canonical))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), "\"a\tb\"") {
+		t.Errorf("detab corrupted a tab inside a string literal:\n%q", string(out))
+	}
+}
+
 func TestCanonicalUppercasesKeywordsNotArgs(t *testing.T) {
 	p := mustParser(t)
 	src := []byte("EN ;\n new x\n set x=1\n write x,!\n quit\n")

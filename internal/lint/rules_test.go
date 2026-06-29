@@ -38,6 +38,43 @@ func TestLineLength(t *testing.T) {
 	}
 }
 
+func TestNoTabs(t *testing.T) {
+	// A leading-tab indentation is the common case (the v-stdlib drift bug).
+	tabbed := "EN ;\n\tset x=1\n\tquit\n"
+	if got := countRule(lintAll(t, tabbed), "M-MOD-039"); got != 2 {
+		t.Errorf("M-MOD-039 on two tab-indented lines: got %d, want 2", got)
+	}
+	// A tab anywhere on the line counts (SAC bans tabs outright).
+	midline := "EN ;\n set x=1\t; trailing tab before comment\n"
+	if got := countRule(lintAll(t, midline), "M-MOD-039"); got != 1 {
+		t.Errorf("M-MOD-039 on a mid-line tab: got %d, want 1", got)
+	}
+	// Space-indented source is clean.
+	clean := "EN ;\n set x=1\n quit\n"
+	if got := countRule(lintAll(t, clean), "M-MOD-039"); got != 0 {
+		t.Errorf("M-MOD-039 on space-only source: got %d, want 0", got)
+	}
+	// The finding points at the first tab on the line (1-based col).
+	for _, f := range lintAll(t, tabbed) {
+		if f.Rule == "M-MOD-039" && f.Line == 2 && f.Col != 1 {
+			t.Errorf("M-MOD-039 col on a leading tab: got %d, want 1", f.Col)
+		}
+	}
+}
+
+func TestNoTabsInDefaultProfile(t *testing.T) {
+	// Must gate by default (modern, not pedantic), like the other [E] hygiene rules.
+	found := false
+	for _, r := range lint.Profile("default") {
+		if r.ID == "M-MOD-039" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("M-MOD-039 must be in the default profile (modern, not pedantic)")
+	}
+}
+
 func TestArgumentCount(t *testing.T) {
 	over := "EN(a1,a2,a3,a4,a5,a6,a7,a8) ; eight args\n quit\n"
 	if got := countRule(lintAll(t, over), "M-MOD-008"); got != 1 {

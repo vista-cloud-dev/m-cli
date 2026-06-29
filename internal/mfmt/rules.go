@@ -23,10 +23,41 @@ var Presets = []string{string(Identity), string(Canonical)}
 func Rules(p Preset) []Rule {
 	switch p {
 	case Canonical:
-		return []Rule{UppercaseCommandKeywords{}}
+		return []Rule{UppercaseCommandKeywords{}, DetabLeadingWhitespace{}}
 	default:
 		return nil // identity
 	}
+}
+
+// DetabLeadingWhitespace converts each tab in a line's leading-whitespace run to
+// a single space (mirroring how an engine flattens a leading tab at install).
+// It touches ONLY the indentation region — a tab inside a string literal or a
+// comment is data and is left untouched — so the parse-tree shape is preserved.
+// This is the auto-fix companion to lint M-MOD-039 (SAC + modern: spaces only).
+type DetabLeadingWhitespace struct{}
+
+// Name implements Rule.
+func (DetabLeadingWhitespace) Name() string { return "detab-leading-whitespace" }
+
+// Edits implements Rule.
+func (DetabLeadingWhitespace) Edits(src []byte, _ parse.Node) []Edit {
+	var edits []Edit
+	atLineStart := true
+	for i := 0; i < len(src); i++ {
+		switch {
+		case src[i] == '\n':
+			atLineStart = true
+		case !atLineStart:
+			// past the indentation region; ignore tabs in code/strings/comments
+		case src[i] == '\t':
+			edits = append(edits, Edit{Start: uint32(i), End: uint32(i + 1), Replacement: []byte(" ")})
+		case src[i] == ' ':
+			// still in the leading-whitespace run
+		default:
+			atLineStart = false // first non-whitespace byte on the line
+		}
+	}
+	return edits
 }
 
 // UppercaseCommandKeywords uppercases every command keyword token (set→SET,

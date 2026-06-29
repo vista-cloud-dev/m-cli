@@ -27,6 +27,7 @@ func All() []Rule { return AllWith(DefaultOptions()) }
 func AllWith(opts Options) []Rule {
 	rules := []Rule{
 		ruleCStyleQuoteEscape,                  // M-MOD-038
+		ruleNoTabs,                             // M-MOD-039
 		ruleByRefSubscript,                     // M-MOD-037
 		ruleLineLength(opts.Thresholds),        // M-MOD-001
 		ruleDotBlockNesting(opts.Thresholds),   // M-MOD-007
@@ -327,6 +328,35 @@ var ruleAbbreviatedCommand = Rule{
 			return "", false
 		}
 		return "abbreviated command keyword `" + string(kw) + "`; modern style prefers the full word", true
+	},
+}
+
+// M-MOD-039 — tab character in source. Both the VistA SAC and modern house style
+// ban tabs ("spaces only"). Engines normalize a leading tab to a single space at
+// install/compile time, so a tab-indented routine silently diverges from the
+// source it shipped from — which breaks v-pkg `verify --drift` (every line reads
+// changed) and renders inconsistently across tools. One finding per offending
+// line, at the first tab.
+var ruleNoTabs = Rule{
+	ID:       "M-MOD-039",
+	Severity: Error,
+	Category: "portability",
+	Title:    "Tab character in source (spaces only)",
+	Tags:     []string{"modern", "vista"},
+	Inspect: func(_ parse.Node, src []byte) []Finding {
+		var out []Finding
+		for i, line := range strings.Split(string(src), "\n") {
+			col := strings.IndexByte(line, '\t')
+			if col < 0 {
+				continue
+			}
+			out = append(out, Finding{
+				Message: "tab character in source; the SAC and modern style require spaces only " +
+					"(engines normalize a leading tab to a space, diverging from the shipped routine)",
+				Line: i + 1, Col: col + 1, EndLine: i + 1, EndCol: col + 2,
+			})
+		}
+		return out
 	},
 }
 
